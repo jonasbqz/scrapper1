@@ -1,0 +1,100 @@
+import { Injectable, Inject, Logger, ConflictException } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { ConfigService } from '@nestjs/config';
+import { DATABASE_CONNECTION } from '@/database/database.module';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type * as schema from '@/database/schema';
+import { ScraperQueue } from './scraper.queue';
+import { OlympusAdapter } from './adapters/olympus.adapter';
+import { IkigaiAdapter } from './adapters/ikigai.adapter';
+import type { ScraperResult } from './scraper.types';
+
+@Injectable()
+export class ScraperService {
+  private readonly logger = new Logger(ScraperService.name);
+  private readonly delayMs: number;
+
+  constructor(
+    @Inject(DATABASE_CONNECTION)
+    private db: NodePgDatabase<typeof schema>,
+    private configService: ConfigService,
+    private queue: ScraperQueue,
+  ) {
+    this.delayMs = this.configService.get<number>('SCRAPER_DELAY_MS') || 2000;
+  }
+
+  getStatus() {
+    return this.queue.getStatus();
+  }
+
+  async triggerScraper(scraperName: string, options?: { startPage?: number; endPage?: number }) {
+    if (this.queue.isRunning()) {
+      const status = this.queue.getStatus();
+      throw new ConflictException(
+        `Scraper already running: ${status.currentTask}. Queue: ${status.queueLength} pending.`,
+      );
+    }
+
+    switch (scraperName) {
+      case 'olympus':
+        return this.scrapeOlympus(options?.startPage, options?.endPage);
+      case 'ikigai':
+        return this.scrapeIkigai(options?.startPage, options?.endPage);
+      default:
+        throw new Error(`Unknown scraper: ${scraperName}`);
+    }
+  }
+
+  /**
+   * Scheduled scraping - Ikigai every hour
+   */
+  @Cron(CronExpression.EVERY_HOUR)
+  async scheduledIkigai() {
+    if (!this.queue.isRunning()) {
+      this.logger.log('Starting scheduled Ikigai scrape');
+      await this.scrapeIkigai(1, 5);
+    }
+  }
+
+  /**
+   * Scheduled scraping - Olympus every 2 hours
+   */
+  @Cron(CronExpression.EVERY_2_HOURS)
+  async scheduledOlympus() {
+    if (!this.queue.isRunning()) {
+      this.logger.log('Starting scheduled Olympus scrape');
+      await this.scrapeOlympus(1, 3);
+    }
+  }
+
+  private async scrapeOlympus(startPage = 1, endPage = 5): Promise<ScraperResult> {
+    return this.queue.enqueue('olympus', async () => {
+      this.logger.log(`Scraping Olympus pages ${startPage}-${endPage}...`);
+
+      const adapter = new OlympusAdapter(this.db, this.delayMs);
+      const result = await adapter.scrape(startPage, endPage);
+
+      this.logger.log(
+        `Olympus scrape completed: ${result.comics} comics, ${result.chapters} chapters, ${result.errors.length} errors`,
+      );
+
+      return result;
+    });
+  }
+
+  private async scrapeIkigai(startPage = 1, endPage = 10): Promise<ScraperResult> {
+    return this.queue.enqueue('ikigai', async () => {
+      this.logger.log(`Scraping Ikigai pages ${startPage}-${endPage}...`);
+
+      const baseUrl = this.configService.get<string>('SCRAPER_IKIGAI_URL');
+      const adapter = new IkigaiAdapter(this.db, this.delayMs, baseUrl);
+      const result = await adapter.scrape(startPage, endPage);
+
+      this.logger.log(
+        `Ikigai scrape completed: ${result.comics} comics, ${result.chapters} chapters, ${result.errors.length} errors`,
+      );
+
+      return result;
+    });
+  }
+}
