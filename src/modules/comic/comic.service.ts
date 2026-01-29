@@ -4,6 +4,7 @@ import { DATABASE_CONNECTION } from '@/database/database.module';
 import { comics, comicGenres, genres, comicScans, chapters } from '@/database/schema';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
+import { CacheService, CACHE_TTL, CACHE_KEYS } from '@/cache/cache.service';
 
 export interface ComicFilters {
   search?: string;
@@ -23,9 +24,20 @@ export class ComicService {
   constructor(
     @Inject(DATABASE_CONNECTION)
     private db: NodePgDatabase<typeof schema>,
+    private cacheService: CacheService,
   ) {}
 
   async findAll(filters: ComicFilters = {}) {
+    const cacheKey = this.cacheService.buildComicListKey(filters);
+
+    return this.cacheService.wrap(
+      cacheKey,
+      () => this.findAllFromDb(filters),
+      CACHE_TTL.MEDIUM, // 30 minutes
+    );
+  }
+
+  private async findAllFromDb(filters: ComicFilters = {}) {
     const { search, type, status, genreIds, genreNames, isNsfw, page = 1, limit = 20, orderBy = 'updated_at', isDesc = true } = filters;
     const offset = (page - 1) * limit;
 
@@ -166,86 +178,126 @@ export class ComicService {
   }
 
   async findById(id: number) {
-    const comic = await this.db.query.comics.findFirst({
-      where: eq(comics.id, id),
-      with: {
-        comicGenres: {
-          with: { genre: true },
-        },
-        comicScans: {
+    const cacheKey = `${CACHE_KEYS.COMIC_DETAIL}:${id}`;
+
+    return this.cacheService.wrap(
+      cacheKey,
+      async () => {
+        const comic = await this.db.query.comics.findFirst({
+          where: eq(comics.id, id),
           with: {
-            scanGroup: true,
-            chapters: {
-              orderBy: [desc(chapters.chapterNumber)],
+            comicGenres: {
+              with: { genre: true },
+            },
+            comicScans: {
+              with: {
+                scanGroup: true,
+                chapters: {
+                  orderBy: [desc(chapters.chapterNumber)],
+                },
+              },
             },
           },
-        },
+        });
+
+        if (!comic) {
+          throw new NotFoundException('Comic not found');
+        }
+
+        return {
+          ...comic,
+          genres: comic.comicGenres.map((cg: any) => cg.genre),
+        };
       },
-    });
-
-    if (!comic) {
-      throw new NotFoundException('Comic not found');
-    }
-
-    return {
-      ...comic,
-      genres: comic.comicGenres.map((cg: any) => cg.genre),
-    };
+      CACHE_TTL.LONG, // 2 hours
+    );
   }
 
   async findBySlug(slug: string) {
-    const comic = await this.db.query.comics.findFirst({
-      where: eq(comics.slug, slug),
-      with: {
-        comicGenres: {
-          with: { genre: true },
-        },
-        comicScans: {
+    const cacheKey = `${CACHE_KEYS.COMIC_SLUG}:${slug}`;
+
+    return this.cacheService.wrap(
+      cacheKey,
+      async () => {
+        const comic = await this.db.query.comics.findFirst({
+          where: eq(comics.slug, slug),
           with: {
-            scanGroup: true,
-            chapters: {
-              orderBy: [desc(chapters.chapterNumber)],
+            comicGenres: {
+              with: { genre: true },
+            },
+            comicScans: {
+              with: {
+                scanGroup: true,
+                chapters: {
+                  orderBy: [desc(chapters.chapterNumber)],
+                },
+              },
             },
           },
-        },
+        });
+
+        if (!comic) {
+          throw new NotFoundException('Comic not found');
+        }
+
+        return {
+          ...comic,
+          genres: comic.comicGenres.map((cg: any) => cg.genre),
+        };
       },
-    });
-
-    if (!comic) {
-      throw new NotFoundException('Comic not found');
-    }
-
-    return {
-      ...comic,
-      genres: comic.comicGenres.map((cg: any) => cg.genre),
-    };
+      CACHE_TTL.LONG, // 2 hours
+    );
   }
 
   async getTrending(limit = 10) {
-    return this.db.query.comics.findMany({
-      orderBy: [desc(comics.views)],
-      limit,
-      with: {
-        comicGenres: {
-          with: { genre: true },
-        },
-      },
-    });
+    const cacheKey = `${CACHE_KEYS.COMIC_TRENDING}:${limit}`;
+
+    return this.cacheService.wrap(
+      cacheKey,
+      () =>
+        this.db.query.comics.findMany({
+          orderBy: [desc(comics.views)],
+          limit,
+          with: {
+            comicGenres: {
+              with: { genre: true },
+            },
+          },
+        }),
+      CACHE_TTL.LONG, // 2 hours
+    );
   }
 
   async getRecent(limit = 10) {
-    return this.db.query.comics.findMany({
-      orderBy: [desc(comics.updatedAt)],
-      limit,
-      with: {
-        comicGenres: {
-          with: { genre: true },
-        },
-      },
-    });
+    const cacheKey = `${CACHE_KEYS.COMIC_RECENT}:${limit}`;
+
+    return this.cacheService.wrap(
+      cacheKey,
+      () =>
+        this.db.query.comics.findMany({
+          orderBy: [desc(comics.updatedAt)],
+          limit,
+          with: {
+            comicGenres: {
+              with: { genre: true },
+            },
+          },
+        }),
+      CACHE_TTL.MEDIUM, // 30 minutes
+    );
   }
 
   async getRecentWithChapters(limit = 20) {
+    const cacheKey = `${CACHE_KEYS.COMIC_RECENT_CHAPTERS}:${limit}`;
+
+    return this.cacheService.wrap(
+      cacheKey,
+      () => this.getRecentWithChaptersFromDb(limit),
+      CACHE_TTL.SHORT, // 10 minutes - frequently updated
+    );
+  }
+
+  private async getRecentWithChaptersFromDb(limit = 20) {
     // Step 1: Get comic_scans that have chapters, ordered by most recent chapter
     // Using raw SQL to get distinct comic_scan_ids with their max chapter date
     const recentScansQuery = await this.db.execute(sql`
@@ -331,9 +383,16 @@ export class ComicService {
   }
 
   async getAllGenres() {
-    return this.db.query.genres.findMany({
-      orderBy: [genres.name],
-    });
+    const cacheKey = CACHE_KEYS.GENRES;
+
+    return this.cacheService.wrap(
+      cacheKey,
+      () =>
+        this.db.query.genres.findMany({
+          orderBy: [genres.name],
+        }),
+      CACHE_TTL.STATIC, // 24 hours - rarely changes
+    );
   }
 
   async incrementViews(id: number) {
@@ -341,6 +400,10 @@ export class ComicService {
       .update(comics)
       .set({ views: sql`${comics.views} + 1` })
       .where(eq(comics.id, id));
+
+    // Invalidate caches that depend on views
+    // Don't invalidate on every view to avoid cache thrashing
+    // Views are accumulated, so cache will auto-refresh
   }
 
   async getComicScanById(comicScanId: number) {
@@ -363,6 +426,16 @@ export class ComicService {
   }
 
   async getRecommendations(comicId: number, limit = 10) {
+    const cacheKey = `${CACHE_KEYS.COMIC_RECOMMENDATIONS}:${comicId}:${limit}`;
+
+    return this.cacheService.wrap(
+      cacheKey,
+      () => this.getRecommendationsFromDb(comicId, limit),
+      CACHE_TTL.LONG, // 2 hours
+    );
+  }
+
+  private async getRecommendationsFromDb(comicId: number, limit = 10) {
     // Get the comic's genres
     const comicGenreRecords = await this.db.query.comicGenres.findMany({
       where: eq(comicGenres.comicId, comicId),
@@ -432,26 +505,34 @@ export class ComicService {
   }
 
   async getPopular(limit = 10) {
-    const popularComics = await this.db.query.comics.findMany({
-      orderBy: [desc(comics.views)],
-      limit,
-      with: {
-        comicGenres: {
-          with: { genre: true },
-        },
-      },
-    });
+    const cacheKey = `${CACHE_KEYS.COMIC_POPULAR}:${limit}`;
 
-    return popularComics.map(comic => ({
-      id: comic.id,
-      title: comic.title,
-      slug: comic.slug,
-      coverImage: comic.coverImage,
-      type: comic.type,
-      status: comic.status,
-      views: comic.views,
-      isNsfw: comic.isNsfw,
-      genres: comic.comicGenres?.map((cg: any) => cg.genre) || [],
-    }));
+    return this.cacheService.wrap(
+      cacheKey,
+      async () => {
+        const popularComics = await this.db.query.comics.findMany({
+          orderBy: [desc(comics.views)],
+          limit,
+          with: {
+            comicGenres: {
+              with: { genre: true },
+            },
+          },
+        });
+
+        return popularComics.map(comic => ({
+          id: comic.id,
+          title: comic.title,
+          slug: comic.slug,
+          coverImage: comic.coverImage,
+          type: comic.type,
+          status: comic.status,
+          views: comic.views,
+          isNsfw: comic.isNsfw,
+          genres: comic.comicGenres?.map((cg: any) => cg.genre) || [],
+        }));
+      },
+      CACHE_TTL.LONG, // 2 hours
+    );
   }
 }

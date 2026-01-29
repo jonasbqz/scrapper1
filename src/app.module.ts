@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { DatabaseModule } from './database/database.module';
+import { RedisCacheModule } from './cache/cache.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ProfileModule } from './modules/profile/profile.module';
 import { ComicModule } from './modules/comic/comic.module';
@@ -22,6 +23,7 @@ import { DownloadsModule } from './modules/downloads/downloads.module';
     }),
     ScheduleModule.forRoot(),
     DatabaseModule,
+    RedisCacheModule,
     AuthModule,
     ProfileModule,
     ComicModule,

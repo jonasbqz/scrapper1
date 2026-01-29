@@ -4,12 +4,14 @@ import { DATABASE_CONNECTION } from '@/database/database.module';
 import { likes, comics } from '@/database/schema';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
+import { CacheService, CACHE_TTL, CACHE_KEYS } from '@/cache/cache.service';
 
 @Injectable()
 export class LikesService {
   constructor(
     @Inject(DATABASE_CONNECTION)
     private db: NodePgDatabase<typeof schema>,
+    private cacheService: CacheService,
   ) {}
 
   async toggle(profileId: string, comicId: number): Promise<{ liked: boolean; likesCount: number }> {
@@ -30,7 +32,10 @@ export class LikesService {
         .set({ likes: sql`${comics.likes} - 1` })
         .where(eq(comics.id, comicId));
 
-      const likesCount = await this.getComicLikesCount(comicId);
+      // Invalidate cache
+      await this.invalidateLikesCache(comicId);
+
+      const likesCount = await this.getComicLikesCountFromDb(comicId);
       return { liked: false, likesCount };
     }
 
@@ -46,7 +51,10 @@ export class LikesService {
       .set({ likes: sql`${comics.likes} + 1` })
       .where(eq(comics.id, comicId));
 
-    const likesCount = await this.getComicLikesCount(comicId);
+    // Invalidate cache
+    await this.invalidateLikesCache(comicId);
+
+    const likesCount = await this.getComicLikesCountFromDb(comicId);
     return { liked: true, likesCount };
   }
 
@@ -61,11 +69,25 @@ export class LikesService {
   }
 
   async getComicLikesCount(comicId: number): Promise<number> {
+    const cacheKey = `${CACHE_KEYS.LIKES_COUNT}:${comicId}`;
+
+    return this.cacheService.wrap(
+      cacheKey,
+      () => this.getComicLikesCountFromDb(comicId),
+      CACHE_TTL.VERY_SHORT, // 5 minutes
+    );
+  }
+
+  private async getComicLikesCountFromDb(comicId: number): Promise<number> {
     const result = await this.db
       .select({ count: count() })
       .from(likes)
       .where(eq(likes.comicId, comicId));
     return result[0]?.count ?? 0;
+  }
+
+  private async invalidateLikesCache(comicId: number): Promise<void> {
+    await this.cacheService.del(`${CACHE_KEYS.LIKES_COUNT}:${comicId}`);
   }
 
   async getUserLikes(profileId: string) {
