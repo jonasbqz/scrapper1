@@ -65,6 +65,30 @@ export class ScraperQueue {
     return cleared;
   }
 
+  /**
+   * Force reset the queue state. Use with caution - only when the queue is stuck.
+   */
+  forceReset() {
+    const wasProcessing = this.isProcessing;
+    const currentTaskName = this.currentTask?.name;
+
+    // Clear everything
+    this.queue.forEach(task => {
+      task.reject(new Error('Queue force reset'));
+    });
+    this.queue = [];
+    this.isProcessing = false;
+    this.currentTask = null;
+
+    this.logger.warn(`Queue force reset. Was processing: ${wasProcessing}, Task: ${currentTaskName}`);
+
+    return {
+      wasProcessing,
+      currentTaskName,
+      message: 'Queue has been force reset',
+    };
+  }
+
   private async processNext() {
     if (this.isProcessing || this.queue.length === 0) {
       return;

@@ -62,4 +62,15 @@ export class ScraperController {
       status: this.scraperService.getStatus(),
     };
   }
+
+  @Post('reset')
+  @ApiOperation({ summary: 'Force reset scraper queue (use when stuck)' })
+  @ApiResponse({ status: 200, description: 'Queue has been force reset' })
+  forceReset() {
+    const result = this.scraperService.forceReset();
+    return {
+      ...result,
+      status: this.scraperService.getStatus(),
+    };
+  }
 }

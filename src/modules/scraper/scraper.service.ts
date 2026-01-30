@@ -36,6 +36,13 @@ export class ScraperService implements OnModuleInit {
     return this.queue.getStatus();
   }
 
+  /**
+   * Force reset the scraper queue when it gets stuck
+   */
+  forceReset() {
+    return this.queue.forceReset();
+  }
+
   async triggerScraper(scraperName: string, options?: { startPage?: number; endPage?: number }) {
     if (this.queue.isRunning()) {
       const status = this.queue.getStatus();
