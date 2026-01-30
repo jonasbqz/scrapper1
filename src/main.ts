@@ -6,9 +6,49 @@ import {
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import fastifyCookie from '@fastify/cookie';
+import { FastifyRequest, FastifyReply } from 'fastify';
 import { AppModule } from './app.module';
 import { SanitizePipe } from './common/pipes';
 import { SanitizeInterceptor } from './common/interceptors';
+import { auth } from './lib/auth';
+import { toNodeHandler } from 'better-auth/node';
+
+// Helper function to handle better-auth requests
+async function handleBetterAuth(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  handler: ReturnType<typeof toNodeHandler>,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const nodeReq = {
+      method: request.method,
+      url: `${request.protocol}://${request.hostname}${request.url}`,
+      headers: request.headers,
+      body: request.body,
+    };
+
+    const nodeRes = {
+      setHeader: (name: string, value: string) => reply.header(name, value),
+      getHeader: (name: string) => reply.getHeader(name),
+      writeHead: (status: number, headers?: Record<string, string>) => {
+        reply.status(status);
+        if (headers) {
+          Object.entries(headers).forEach(([key, value]) => reply.header(key, value));
+        }
+      },
+      end: (body?: string) => {
+        if (body) {
+          reply.send(body);
+        } else {
+          reply.send();
+        }
+        resolve(true);
+      },
+    };
+
+    handler(nodeReq as any, nodeRes as any).catch(() => resolve(false));
+  });
+}
 
 async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
@@ -24,6 +64,21 @@ async function bootstrap() {
   app.enableCors({
     origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000'],
     credentials: true,
+  });
+
+  // Register better-auth handler for all auth routes using preHandler hook
+  const authHandler = toNodeHandler(auth);
+  const fastifyInstance = app.getHttpAdapter().getInstance();
+
+  // Use a hook to intercept all /api/auth/* requests
+  fastifyInstance.addHook('preHandler', async (request, reply) => {
+    // Only handle /api/auth/ routes
+    const url = request.url.split('?')[0]; // Remove query string
+    if (url.startsWith('/api/auth/')) {
+      await handleBetterAuth(request, reply, authHandler);
+      // Prevent further processing
+      return;
+    }
   });
 
   // Global interceptor: Sanitize query and path params
