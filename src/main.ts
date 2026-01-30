@@ -39,9 +39,7 @@ async function bootstrap() {
     }),
   );
 
-  app.setGlobalPrefix('api', {
-    exclude: ['auth/(.*)'],
-  });
+  app.setGlobalPrefix('api');
 
   const config = new DocumentBuilder()
     .setTitle('Monline Scraper API')

@@ -11,7 +11,7 @@ import { CurrentUser, UserSession } from './current-user.decorator';
 export class AuthController {
   private handler = toNodeHandler(auth);
 
-  @All('auth/*')
+  @All('auth/(.*)')
   @ApiExcludeEndpoint()
   async handleAuth(@Req() req: FastifyRequest, @Res() res: FastifyReply) {
     // Convert Fastify request/response to Node request/response for better-auth
