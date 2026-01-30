@@ -485,6 +485,19 @@ export class ComicService {
         comic: true,
         chapters: {
           orderBy: [desc(chapters.chapterNumber)],
+          columns: {
+            id: true,
+            comicScanId: true,
+            chapterNumber: true,
+            title: true,
+            slug: true,
+            releaseDate: true,
+            views: true,
+            copyrighted: true,
+            createdAt: true,
+            updatedAt: true,
+            // urlPages excluded - not needed for comic listing
+          },
         },
       },
     });

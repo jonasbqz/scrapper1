@@ -44,18 +44,19 @@ export const auth = betterAuth({
     ...(process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000']),
     'https://mangolibreria.com',
     'https://api.mangolibreria.com',
+    'https://www.mangolibreria.com'
   ],
-  advanced: {
-    crossSubDomainCookies: {
-      enabled: true,
-      domain: process.env.NODE_ENV === 'production' ? '.mangolibreria.com' : undefined,
-    },
-    defaultCookieAttributes: {
-      secure: process.env.NODE_ENV === 'production',
-      httpOnly: true,
-      sameSite: 'lax',
-    },
-  },
+  // advanced: {
+  //   crossSubDomainCookies: {
+  //     enabled: true,
+  //     // domain: process.env.NODE_ENV === 'production' ? '.mangolibreria.com' : undefined,
+  //   },
+  //   defaultCookieAttributes: {
+  //     // secure: process.env.NODE_ENV === 'production',
+  //     httpOnly: true,
+  //     sameSite: 'lax',
+  //   },
+  // },
 });
 
 export type Session = typeof auth.$Infer.Session;
