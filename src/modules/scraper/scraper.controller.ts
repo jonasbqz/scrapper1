@@ -17,7 +17,7 @@ export class ScraperController {
     return this.scraperService.getStatus();
   }
 
-  @Post('trigger')
+  @Get('trigger')
   @ApiOperation({ summary: 'Manually trigger a scraper' })
   @ApiQuery({ name: 'name', required: true, type: String })
   @ApiQuery({ name: 'startPage', required: false, type: Number })
