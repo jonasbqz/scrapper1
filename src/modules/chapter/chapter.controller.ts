@@ -1,4 +1,4 @@
-import { Controller, Get, Param, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param, ParseIntPipe } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ChapterService } from './chapter.service';
 import { ComicService } from '../comic/comic.service';
@@ -68,7 +68,23 @@ export class ChapterController {
   @Get(':id/pages')
   @ApiOperation({ summary: 'Get chapter pages' })
   async getPages(@Param('id', ParseIntPipe) id: number) {
-    return this.chapterService.getPages(id);
+    const nav = await this.chapterService.getNavigation(id);
+    const chapter = await this.chapterService.getPages(id);
+    if (!chapter) {
+      throw new NotFoundException('Chapter not found');
+    }
+    if (chapter.copyrighted) {
+      return { pages: [], copyrighted: true };
+    }
+    return {
+      data: {
+        id: chapter.id,
+        chapter_number: String(chapter.chapterNumber),
+        url_pages: chapter.urlPages || [],
+        prev_chapter_id: nav.prev?.id || null,
+        next_chapter_id: nav.next?.id || null,
+      }
+    }
   }
 
   @Get('comic-scan/:comicScanId')

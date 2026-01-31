@@ -111,18 +111,10 @@ export class ChapterService {
             id: true,
             urlPages: true,
             copyrighted: true,
+            chapterNumber: true,
           },
         });
-
-        if (!chapter) {
-          throw new NotFoundException('Chapter not found');
-        }
-
-        if (chapter.copyrighted) {
-          return { pages: [], copyrighted: true };
-        }
-
-        return { pages: chapter.urlPages, copyrighted: false };
+        return chapter;
       },
       CACHE_TTL.STATIC, // 24 hours - pages rarely change
     );
