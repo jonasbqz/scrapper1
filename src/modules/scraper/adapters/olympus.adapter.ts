@@ -165,7 +165,7 @@ export class OlympusAdapter {
     const maxPages = 50; // Safety limit
 
     while (page <= maxPages) {
-      const chaptersUrl = `${OLYMPUS_API}/series/${data.slug}/chapters?page=${page}&direction=desc&type=comic`;
+      const chaptersUrl = `${OLYMPUS_API}/series/${data.slug}/chapters?page=${page}&type=comic`;
       const chaptersResponse = await this.fetchJson<OlympusApiResponse>(chaptersUrl);
 
       if (!chaptersResponse.data || !Array.isArray(chaptersResponse.data) || chaptersResponse.data.length === 0) {
@@ -212,6 +212,9 @@ export class OlympusAdapter {
       this.logger.log(`No new chapters for ${comic.title}`);
       return;
     }
+
+    // Revertir para insertar desde el más antiguo al más nuevo
+    // missingChapters.reverse();
 
     this.logger.log(`Total: ${missingChapters.length} new chapters to add for ${comic.title}`);
 
