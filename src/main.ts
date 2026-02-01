@@ -98,12 +98,16 @@ async function bootstrap() {
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('docs', app, document);
+  if (process.env.NODE_ENV === 'development') {
+    SwaggerModule.setup('docs', app, document);
+  }
 
   const port = process.env.PORT || 8085;
   await app.listen(port, '0.0.0.0');
   console.log(`Server running on http://localhost:${port}`);
-  console.log(`Swagger docs: http://localhost:${port}/docs`);
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`Swagger docs: http://localhost:${port}/docs`);
+  }
 }
 
 bootstrap();
