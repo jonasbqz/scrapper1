@@ -26,7 +26,7 @@ export interface ComicFilters {
   isNsfw?: boolean;
   page?: number;
   limit?: number;
-  orderBy?: 'created_at' | 'views' | 'updated_at';
+  orderBy?: 'recent_chapter' | 'created_at' | 'views' | 'updated_at';
   isDesc?: boolean;
 }
 
@@ -40,38 +40,31 @@ export class ComicService {
 
   async findAll(filters: ComicFilters = {}) {
     const cacheKey = this.cacheService.buildComicListKey(filters);
+    const ttl = filters.search ? CACHE_TTL.VERY_SHORT : CACHE_TTL.SHORT;
 
     return this.cacheService.wrap(
       cacheKey,
       () => this.findAllFromDb(filters),
-      CACHE_TTL.MEDIUM, // 30 minutes
+      ttl,
     );
   }
 
   private async findAllFromDb(filters: ComicFilters = {}) {
-    const { search, type, status, genreIds, genreNames, isNsfw, page = 1, limit = 20, orderBy = 'updated_at', isDesc = true } = filters;
+    const { search, type, status, genreIds, genreNames, isNsfw, page = 1, limit = 20, orderBy = 'recent_chapter', isDesc = true } = filters;
     const offset = (page - 1) * limit;
 
     const conditions = [];
 
     if (search) {
-      // Normalize search term (remove accents for comparison)
       const normalizedSearch = normalizeString(search);
       const searchPattern = `%${search}%`;
       const normalizedPattern = `%${normalizedSearch}%`;
 
-      // Search in title and titleAlternative with:
-      // 1. Case-insensitive search with ILIKE
-      // 2. Accent-insensitive search using translate function
       conditions.push(
         or(
-          // Case-insensitive search on title
           ilike(comics.title, searchPattern),
-          // Case-insensitive search on alternative title
           ilike(comics.titleAlternative, searchPattern),
-          // Accent-insensitive search on title (using PostgreSQL translate)
           sql`LOWER(TRANSLATE(${comics.title}, 'áéíóúàèìòùâêîôûäëïöüñÁÉÍÓÚÀÈÌÒÙÂÊÎÔÛÄËÏÖÜÑ', 'aeiouaeiouaeiouaeiounaeiouaeiouaeiouaeiouna')) LIKE ${normalizedPattern}`,
-          // Accent-insensitive search on alternative title
           sql`LOWER(TRANSLATE(COALESCE(${comics.titleAlternative}, ''), 'áéíóúàèìòùâêîôûäëïöüñÁÉÍÓÚÀÈÌÒÙÂÊÎÔÛÄËÏÖÜÑ', 'aeiouaeiouaeiouaeiounaeiouaeiouaeiouaeiouna')) LIKE ${normalizedPattern}`,
         )!
       );
@@ -86,7 +79,6 @@ export class ComicService {
       conditions.push(eq(comics.isNsfw, isNsfw));
     }
 
-    // Filter by genre names (comma-separated)
     if (genreNames?.length) {
       const genreRecords = await this.db.query.genres.findMany({
         where: inArray(genres.name, genreNames),
@@ -101,7 +93,6 @@ export class ComicService {
         if (comicIds.length > 0) {
           conditions.push(inArray(comics.id, comicIds));
         } else {
-          // No comics found with those genres, return empty
           conditions.push(eq(comics.id, -1));
         }
       }
@@ -110,7 +101,6 @@ export class ComicService {
         .select({ comicId: comicGenres.comicId })
         .from(comicGenres)
         .where(inArray(comicGenres.genreId, genreIds));
-
       const comicIds = comicsWithGenres.map(c => c.comicId);
       if (comicIds.length > 0) {
         conditions.push(inArray(comics.id, comicIds));
@@ -119,69 +109,99 @@ export class ComicService {
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    // Determine order column
-    const orderColumn = orderBy === 'views' ? comics.views : orderBy === 'created_at' ? comics.createdAt : comics.updatedAt;
+    // Step 1: Get ordered comic IDs, count, and genres in parallel
+    const getOrderedIds = async (): Promise<number[]> => {
+      if (orderBy === 'recent_chapter') {
+        const lastChapterSubquery = sql`(
+          SELECT MAX(ch.created_at) FROM chapters ch
+          INNER JOIN comic_scans cs ON ch.comic_scan_id = cs.id
+          WHERE cs.comic_id = ${comics.id}
+        )`;
 
-    // Step 1: Get comics with genres and comicScans (without chapters)
-    const [results, countResult, allGenres] = await Promise.all([
-      this.db.query.comics.findMany({
-        where: whereClause,
-        orderBy: [isDesc ? desc(orderColumn) : asc(orderColumn)],
-        limit,
-        offset,
-        with: {
-          comicGenres: {
-            with: {
-              genre: true,
-            },
-          },
-          comicScans: {
-            with: {
-              scanGroup: true,
-            },
-          },
-        },
-      }),
-      this.db
-        .select({ count: sql<number>`count(*)` })
+        const result = await this.db
+          .select({ id: comics.id })
+          .from(comics)
+          .where(whereClause)
+          .orderBy(isDesc
+            ? sql`${lastChapterSubquery} DESC NULLS LAST`
+            : sql`${lastChapterSubquery} ASC NULLS LAST`
+          )
+          .limit(limit)
+          .offset(offset);
+
+        return result.map(r => r.id);
+      }
+
+      const orderColumn = orderBy === 'views' ? comics.views
+        : orderBy === 'created_at' ? comics.createdAt
+        : comics.updatedAt;
+
+      const result = await this.db
+        .select({ id: comics.id })
         .from(comics)
-        .where(whereClause),
-      this.db.query.genres.findMany({
-        orderBy: [genres.name],
-      }),
+        .where(whereClause)
+        .orderBy(isDesc ? desc(orderColumn) : asc(orderColumn))
+        .limit(limit)
+        .offset(offset);
+
+      return result.map(r => r.id);
+    };
+
+    const [orderedComicIds, countResult, allGenres] = await Promise.all([
+      getOrderedIds(),
+      this.db.select({ count: sql<number>`count(*)` }).from(comics).where(whereClause),
+      this.db.query.genres.findMany({ orderBy: [genres.name] }),
     ]);
 
-    // Step 2: Get comic_scan_ids from results
-    const comicScanIds = results.flatMap(comic =>
-      comic.comicScans?.map(cs => cs.id) || []
-    );
+    const total = Number(countResult[0]?.count || 0);
 
-    // Step 3: Get top 2 chapters per comic_scan
-    let chaptersByScan = new Map<number, any[]>();
+    if (orderedComicIds.length === 0) {
+      return {
+        data: [],
+        pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+        genres: allGenres.map(g => g.name),
+      };
+    }
+
+    // Step 2: Fetch full comic data with relations
+    const results = await this.db.query.comics.findMany({
+      where: inArray(comics.id, orderedComicIds),
+      with: {
+        comicGenres: { with: { genre: true } },
+        comicScans: { with: { scanGroup: true } },
+      },
+    });
+
+    // Preserve ordering from step 1
+    const comicMap = new Map(results.map(c => [c.id, c]));
+    const orderedResults = orderedComicIds.map(id => comicMap.get(id)).filter(Boolean) as typeof results;
+
+    // Step 3: Get top 2 chapters per comic_scan (window function, only fetches what's needed)
+    const comicScanIds = orderedResults.flatMap(comic => comic.comicScans?.map(cs => cs.id) || []);
+    const chaptersByScan = new Map<number, any[]>();
 
     if (comicScanIds.length > 0) {
-      // Get chapters for these comic_scans
-      const allChapters = await this.db.query.chapters.findMany({
-        where: inArray(chapters.comicScanId, comicScanIds),
-        orderBy: [desc(chapters.createdAt)],
-      });
+      const chaptersResult = await this.db.execute(sql`
+        SELECT id, comic_scan_id, chapter_number, title, created_at FROM (
+          SELECT id, comic_scan_id, chapter_number, title, created_at,
+            ROW_NUMBER() OVER (PARTITION BY comic_scan_id ORDER BY created_at DESC) as rn
+          FROM chapters
+          WHERE comic_scan_id IN (${sql.join(comicScanIds.map(id => sql`${id}`), sql`, `)})
+        ) sub
+        WHERE rn <= 2
+      `);
 
-      // Group by comic_scan_id, keeping only top 2
-      for (const ch of allChapters) {
-        const scanId = ch.comicScanId;
+      for (const ch of chaptersResult.rows as any[]) {
+        const scanId = ch.comic_scan_id;
         if (!chaptersByScan.has(scanId)) {
           chaptersByScan.set(scanId, []);
         }
-        const arr = chaptersByScan.get(scanId)!;
-        if (arr.length < 2) {
-          arr.push(ch);
-        }
+        chaptersByScan.get(scanId)!.push(ch);
       }
     }
 
     return {
-      data: results.map(comic => {
-        // Get the first comic scan with chapters
+      data: orderedResults.map(comic => {
         const mainScan = comic.comicScans?.find(cs => chaptersByScan.has(cs.id)) || comic.comicScans?.[0];
         const recentChapters = mainScan ? (chaptersByScan.get(mainScan.id) || []) : [];
 
@@ -191,18 +211,13 @@ export class ComicService {
           scan_group_name: mainScan?.scanGroup?.name || 'Unknown',
           recent_chapters: recentChapters.map((ch: any) => ({
             id: ch.id,
-            chapter_number: String(ch.chapterNumber),
-            title: ch.title || `Capítulo ${ch.chapterNumber}`,
-            created_at: ch.createdAt,
+            chapter_number: String(ch.chapter_number),
+            title: ch.title || `Capítulo ${ch.chapter_number}`,
+            created_at: ch.created_at,
           })),
         };
       }),
-      pagination: {
-        page,
-        limit,
-        total: Number(countResult[0]?.count || 0),
-        totalPages: Math.ceil(Number(countResult[0]?.count || 0) / limit),
-      },
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
       genres: allGenres.map(g => g.name),
     };
   }
@@ -337,19 +352,23 @@ export class ComicService {
   }
 
   private async getRecentWithChaptersFromDb(limit = 20, isNsfw?: boolean) {
-    // Step 1: Get comic_scans that have chapters, ordered by most recent chapter
-    // Using raw SQL to get distinct comic_scan_ids with their max chapter date
-    const recentScansQuery = await this.db.execute(sql`
-      SELECT DISTINCT ON (comic_scan_id)
-        comic_scan_id,
-        created_at as last_chapter_at
-      FROM chapters
-      ORDER BY comic_scan_id, created_at DESC
+    // Step 1: Get comic_scan_ids ordered by most recent chapter, filtered in SQL
+    const nsfwCondition = isNsfw !== undefined
+      ? sql` AND c.is_nsfw = ${isNsfw}`
+      : sql``;
+
+    const recentScansResult = await this.db.execute(sql`
+      SELECT cs.id as comic_scan_id, MAX(ch.created_at) as last_chapter_at
+      FROM chapters ch
+      INNER JOIN comic_scans cs ON ch.comic_scan_id = cs.id
+      INNER JOIN comics c ON cs.comic_id = c.id
+      WHERE 1=1 ${nsfwCondition}
+      GROUP BY cs.id
+      ORDER BY last_chapter_at DESC
+      LIMIT ${limit}
     `);
 
-    // Sort by last_chapter_at descending
-    const sortedScans = (recentScansQuery.rows as any[])
-      .sort((a, b) => new Date(b.last_chapter_at).getTime() - new Date(a.last_chapter_at).getTime());
+    const sortedScans = recentScansResult.rows as any[];
 
     if (sortedScans.length === 0) {
       return [];
@@ -366,38 +385,33 @@ export class ComicService {
       },
     });
 
-    // Create a map for quick lookup
     const scanDataMap = new Map(comicScansData.map(cs => [cs.id, cs]));
 
-    // Step 3: Get top 2 chapters for each comic_scan
-    const chaptersData = await this.db.query.chapters.findMany({
-      where: inArray(chapters.comicScanId, scanIds),
-      orderBy: [desc(chapters.createdAt)],
-    });
+    // Step 3: Get top 2 chapters per comic_scan (window function)
+    const chaptersResult = await this.db.execute(sql`
+      SELECT id, comic_scan_id, chapter_number, title, created_at FROM (
+        SELECT id, comic_scan_id, chapter_number, title, created_at,
+          ROW_NUMBER() OVER (PARTITION BY comic_scan_id ORDER BY created_at DESC) as rn
+        FROM chapters
+        WHERE comic_scan_id IN (${sql.join(scanIds.map(id => sql`${id}`), sql`, `)})
+      ) sub
+      WHERE rn <= 2
+    `);
 
-    // Group chapters by comic_scan_id, keeping only top 2
-    const chaptersByScan = new Map<number, typeof chaptersData>();
-    for (const chapter of chaptersData) {
-      const scanId = chapter.comicScanId;
+    const chaptersByScan = new Map<number, any[]>();
+    for (const chapter of chaptersResult.rows as any[]) {
+      const scanId = chapter.comic_scan_id;
       if (!chaptersByScan.has(scanId)) {
         chaptersByScan.set(scanId, []);
       }
-      const arr = chaptersByScan.get(scanId)!;
-      if (arr.length < 2) {
-        arr.push(chapter);
-      }
+      chaptersByScan.get(scanId)!.push(chapter);
     }
 
-    // Step 4: Build results in the correct order, filtering by NSFW if specified
-    const results = sortedScans
+    // Step 4: Build results preserving order
+    return sortedScans
       .map(({ comic_scan_id, last_chapter_at }) => {
         const scan = scanDataMap.get(comic_scan_id);
         if (!scan?.comic) return null;
-
-        // Filter by NSFW if specified
-        if (isNsfw !== undefined && scan.comic.isNsfw !== isNsfw) {
-          return null;
-        }
 
         const chaps = chaptersByScan.get(comic_scan_id) || [];
 
@@ -416,16 +430,13 @@ export class ComicService {
           last_chapter_at: last_chapter_at,
           recent_chapters: chaps.map(ch => ({
             id: ch.id,
-            chapter_number: String(ch.chapterNumber),
-            title: ch.title || `Capítulo ${ch.chapterNumber}`,
-            created_at: ch.createdAt,
+            chapter_number: String(ch.chapter_number),
+            title: ch.title || `Capítulo ${ch.chapter_number}`,
+            created_at: ch.created_at,
           })),
         };
       })
-      .filter(Boolean)
-      .slice(0, limit); // Apply limit after filtering
-
-    return results;
+      .filter(Boolean);
   }
 
   // Adult genre slugs that should be hidden when not in adult mode

@@ -23,7 +23,7 @@ export class ScraperController {
   @ApiQuery({ name: 'startPage', required: false, type: Number, description: 'Start page (default: 1)' })
   @ApiQuery({ name: 'endPage', required: false, type: Number, description: 'End page (default: 5 for olympus, 10 for ikigai)' })
   @ApiResponse({ status: 200, description: 'Scraper completed' })
-  @ApiResponse({ status: 409, description: 'Another scraper is already running' })
+  @ApiResponse({ status: 409, description: 'That scraper is already running' })
   async trigger(
     @Query('name') name: string,
     @Query('startPage') startPage?: string,

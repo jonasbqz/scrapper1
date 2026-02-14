@@ -25,11 +25,9 @@ export class ScraperService implements OnModuleInit {
 
   async onModuleInit() {
     this.logger.log('Server started. Triggering initial scrape tasks...');
-    
-    // We run them sequentially in the queue to avoid API rate limiting on startup
-    // Using a smaller page range for the initial startup scrape
-    this.scrapeIkigai(1, 1).catch(err => this.logger.error(`Initial Ikigai scrape failed: ${err}`));
-    this.scrapeOlympus(1, 1).catch(err => this.logger.error(`Initial Olympus scrape failed: ${err}`));
+
+    this.scrapeIkigai(1, 2).catch(err => this.logger.error(`Initial Ikigai scrape failed: ${err}`));
+    this.scrapeOlympus(1, 2).catch(err => this.logger.error(`Initial Olympus scrape failed: ${err}`));
   }
 
   getStatus() {
@@ -44,10 +42,9 @@ export class ScraperService implements OnModuleInit {
   }
 
   async triggerScraper(scraperName: string, options?: { startPage?: number; endPage?: number }) {
-    if (this.queue.isRunning()) {
-      const status = this.queue.getStatus();
+    if (this.queue.isRunning(scraperName)) {
       throw new ConflictException(
-        `Scraper already running: ${status.currentTask}. Queue: ${status.queueLength} pending.`,
+        `Scraper "${scraperName}" is already running.`,
       );
     }
 
@@ -66,7 +63,7 @@ export class ScraperService implements OnModuleInit {
    */
   @Cron(CronExpression.EVERY_HOUR)
   async scheduledIkigai() {
-    if (!this.queue.isRunning()) {
+    if (!this.queue.isRunning('ikigai')) {
       this.logger.log('Starting scheduled Ikigai scrape');
       await this.scrapeIkigai(1, 5);
     }
@@ -77,7 +74,7 @@ export class ScraperService implements OnModuleInit {
    */
   @Cron(CronExpression.EVERY_2_HOURS)
   async scheduledOlympus() {
-    if (!this.queue.isRunning()) {
+    if (!this.queue.isRunning('olympus')) {
       this.logger.log('Starting scheduled Olympus scrape');
       await this.scrapeOlympus(1, 3);
     }

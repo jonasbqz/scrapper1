@@ -24,7 +24,7 @@ export class ComicController {
   @ApiQuery({ name: 'nsfw', required: false, type: Boolean })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'orderBy', required: false, enum: ['created_at', 'views', 'updated_at'] })
+  @ApiQuery({ name: 'orderBy', required: false, enum: ['recent_chapter', 'created_at', 'views', 'updated_at'] })
   @ApiQuery({ name: 'isDesc', required: false, type: Boolean })
   async findAll(
     @Query('search') search?: string,
@@ -45,7 +45,7 @@ export class ComicController {
       isNsfw: nsfw === 'false' ? false : nsfw === 'true' ? true : undefined,
       page: page ? parseInt(page, 10) : 1,
       limit: limit ? parseInt(limit, 10) : 20,
-      orderBy: (orderBy as 'created_at' | 'views' | 'updated_at') || 'updated_at',
+      orderBy: (orderBy as ComicFilters['orderBy']) || 'recent_chapter',
       isDesc: isDesc !== 'false',
     };
 

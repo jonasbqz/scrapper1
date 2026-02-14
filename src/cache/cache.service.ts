@@ -135,7 +135,7 @@ export class CacheService {
    * Invalidate all comic-related cache entries
    */
   async invalidateComicCache(comicId?: number): Promise<void> {
-    const keysToDelete = [
+    const patterns = [
       `${CACHE_KEYS.COMIC_TRENDING}:*`,
       `${CACHE_KEYS.COMIC_RECENT}:*`,
       `${CACHE_KEYS.COMIC_RECENT_CHAPTERS}:*`,
@@ -144,13 +144,11 @@ export class CacheService {
     ];
 
     if (comicId) {
-      keysToDelete.push(`${CACHE_KEYS.COMIC_DETAIL}:${comicId}`);
-      keysToDelete.push(`${CACHE_KEYS.COMIC_RECOMMENDATIONS}:${comicId}:*`);
+      patterns.push(`${CACHE_KEYS.COMIC_DETAIL}:${comicId}`);
+      patterns.push(`${CACHE_KEYS.COMIC_RECOMMENDATIONS}:${comicId}:*`);
     }
 
-    for (const pattern of keysToDelete) {
-      await this.delByPattern(pattern);
-    }
+    await Promise.all(patterns.map(pattern => this.delByPattern(pattern)));
   }
 
   /**

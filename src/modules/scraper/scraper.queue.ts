@@ -9,22 +9,38 @@ interface QueuedTask {
   reject: (error: Error) => void;
 }
 
+interface ScraperLane {
+  queue: QueuedTask[];
+  isProcessing: boolean;
+  currentTask: QueuedTask | null;
+  lastResult: ScraperResult | null;
+}
+
 /**
- * Queue for managing scraper tasks to prevent concurrency issues.
- * Only one scraper task can run at a time.
+ * Queue for managing scraper tasks.
+ * Each scraper name gets its own independent lane, so different scrapers can run in parallel.
+ * Within the same scraper, tasks are processed sequentially.
  */
 @Injectable()
 export class ScraperQueue {
   private readonly logger = new Logger(ScraperQueue.name);
-  private queue: QueuedTask[] = [];
-  private isProcessing = false;
-  private currentTask: QueuedTask | null = null;
-  private lastResult: ScraperResult | null = null;
+  private lanes = new Map<string, ScraperLane>();
 
-  /**
-   * Add a task to the queue. Tasks are processed sequentially.
-   */
+  private getLane(name: string): ScraperLane {
+    if (!this.lanes.has(name)) {
+      this.lanes.set(name, {
+        queue: [],
+        isProcessing: false,
+        currentTask: null,
+        lastResult: null,
+      });
+    }
+    return this.lanes.get(name)!;
+  }
+
   async enqueue(name: string, execute: () => Promise<ScraperResult>): Promise<ScraperResult> {
+    const lane = this.getLane(name);
+
     return new Promise((resolve, reject) => {
       const task: QueuedTask = {
         id: `${name}-${Date.now()}`,
@@ -34,88 +50,119 @@ export class ScraperQueue {
         reject,
       };
 
-      this.queue.push(task);
-      this.logger.log(`Task "${name}" added to queue. Queue size: ${this.queue.length}`);
+      lane.queue.push(task);
+      this.logger.log(`Task "${name}" added to queue. Lane size: ${lane.queue.length}`);
 
-      this.processNext();
+      this.processNext(name);
     });
   }
 
-  isRunning(): boolean {
-    return this.isProcessing;
+  isRunning(name?: string): boolean {
+    if (name) {
+      return this.getLane(name).isProcessing;
+    }
+    for (const lane of this.lanes.values()) {
+      if (lane.isProcessing) return true;
+    }
+    return false;
   }
 
   getStatus() {
+    const scrapers: Record<string, { isProcessing: boolean; currentTask: string | null; queueLength: number; queuedTasks: string[]; lastResult: ScraperResult | null }> = {};
+
+    for (const [name, lane] of this.lanes.entries()) {
+      scrapers[name] = {
+        isProcessing: lane.isProcessing,
+        currentTask: lane.currentTask?.name || null,
+        queueLength: lane.queue.length,
+        queuedTasks: lane.queue.map(t => t.name),
+        lastResult: lane.lastResult,
+      };
+    }
+
     return {
-      isProcessing: this.isProcessing,
-      currentTask: this.currentTask?.name || null,
-      queueLength: this.queue.length,
-      queuedTasks: this.queue.map(t => t.name),
-      lastResult: this.lastResult,
+      isProcessing: this.isRunning(),
+      scrapers,
     };
   }
 
-  clear() {
-    const cleared = this.queue.length;
-    this.queue.forEach(task => {
-      task.reject(new Error('Queue cleared'));
-    });
-    this.queue = [];
-    this.logger.log(`Queue cleared. Removed ${cleared} pending tasks.`);
-    return cleared;
+  clear(name?: string) {
+    if (name) {
+      const lane = this.getLane(name);
+      const cleared = lane.queue.length;
+      lane.queue.forEach(task => task.reject(new Error('Queue cleared')));
+      lane.queue = [];
+      this.logger.log(`Lane "${name}" cleared. Removed ${cleared} pending tasks.`);
+      return cleared;
+    }
+
+    let total = 0;
+    for (const [laneName, lane] of this.lanes.entries()) {
+      total += lane.queue.length;
+      lane.queue.forEach(task => task.reject(new Error('Queue cleared')));
+      lane.queue = [];
+      this.logger.log(`Lane "${laneName}" cleared.`);
+    }
+    return total;
   }
 
-  /**
-   * Force reset the queue state. Use with caution - only when the queue is stuck.
-   */
-  forceReset() {
-    const wasProcessing = this.isProcessing;
-    const currentTaskName = this.currentTask?.name;
+  forceReset(name?: string) {
+    if (name) {
+      const lane = this.getLane(name);
+      const wasProcessing = lane.isProcessing;
+      const currentTaskName = lane.currentTask?.name;
 
-    // Clear everything
-    this.queue.forEach(task => {
-      task.reject(new Error('Queue force reset'));
-    });
-    this.queue = [];
-    this.isProcessing = false;
-    this.currentTask = null;
+      lane.queue.forEach(task => task.reject(new Error('Queue force reset')));
+      lane.queue = [];
+      lane.isProcessing = false;
+      lane.currentTask = null;
 
-    this.logger.warn(`Queue force reset. Was processing: ${wasProcessing}, Task: ${currentTaskName}`);
+      this.logger.warn(`Lane "${name}" force reset. Was processing: ${wasProcessing}, Task: ${currentTaskName}`);
+      return { wasProcessing, currentTaskName, message: `Lane "${name}" has been force reset` };
+    }
 
-    return {
-      wasProcessing,
-      currentTaskName,
-      message: 'Queue has been force reset',
-    };
+    const results: Record<string, { wasProcessing: boolean; currentTaskName: string | undefined }> = {};
+    for (const [laneName, lane] of this.lanes.entries()) {
+      results[laneName] = { wasProcessing: lane.isProcessing, currentTaskName: lane.currentTask?.name };
+      lane.queue.forEach(task => task.reject(new Error('Queue force reset')));
+      lane.queue = [];
+      lane.isProcessing = false;
+      lane.currentTask = null;
+    }
+
+    this.logger.warn('All lanes force reset.');
+    return { results, message: 'All lanes have been force reset' };
   }
 
-  private async processNext() {
-    if (this.isProcessing || this.queue.length === 0) {
+  private async processNext(name: string) {
+    const lane = this.getLane(name);
+
+    if (lane.isProcessing || lane.queue.length === 0) {
       return;
     }
 
-    this.isProcessing = true;
-    this.currentTask = this.queue.shift()!;
+    lane.isProcessing = true;
+    lane.currentTask = lane.queue.shift()!;
 
-    this.logger.log(`Starting task "${this.currentTask.name}"`);
+    this.logger.log(`Starting task "${lane.currentTask.name}"`);
 
     try {
-      const result = await this.currentTask.execute();
-      this.lastResult = result;
-      this.logger.log(`Task "${this.currentTask.name}" completed successfully`);
-      this.currentTask.resolve(result);
+      const result = await lane.currentTask.execute();
+      lane.lastResult = result;
+      this.logger.log(`Task "${lane.currentTask.name}" completed successfully`);
+      lane.currentTask.resolve(result);
     } catch (error) {
-      this.logger.error(`Task "${this.currentTask.name}" failed: ${error}`);
-      this.lastResult = {
+      this.logger.error(`Task "${lane.currentTask.name}" failed: ${error}`);
+      lane.lastResult = {
         comics: 0,
         chapters: 0,
         errors: [String(error)],
       };
-      this.currentTask.reject(error as Error);
+      lane.currentTask.reject(error as Error);
     } finally {
-      this.currentTask = null;
-      this.isProcessing = false;
-      this.processNext();
+      lane.currentTask = null;
+      lane.isProcessing = false;
+      this.processNext(name);
     }
   }
 }
