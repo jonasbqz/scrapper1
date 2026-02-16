@@ -16,15 +16,8 @@ export const ADULT_GENRE_SLUGS = [
   'gore',         // Gore (mature content)
 ];
 
-// Hentai genre slugs - used to isolate hentai content completely
-export const HENTAI_GENRE_SLUGS = ['hentai'];
-
 export function isAdultGenreSlug(slug: string): boolean {
   return ADULT_GENRE_SLUGS.includes(slug.toLowerCase());
-}
-
-export function isHentaiGenreSlug(slug: string): boolean {
-  return HENTAI_GENRE_SLUGS.includes(slug.toLowerCase());
 }
 
 export interface ScrapedComic {

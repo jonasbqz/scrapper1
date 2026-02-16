@@ -7,7 +7,7 @@ import type * as schema from '@/database/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 import { comics, chapters, comicScans, scanGroups, genres, comicGenres } from '@/database/schema';
 import type { ScrapedComic, ScrapedChapter, ChapterListItem, ScraperResult } from '../scraper.types';
-import { isAdultGenreSlug, isHentaiGenreSlug } from './base.adapter';
+import { isAdultGenreSlug } from './base.adapter';
 
 const M440_ORIGIN = 'https://m440.in';
 const M440_IMAGE_CDN = 'https://s1.m440.in';
@@ -524,16 +524,12 @@ export class PeerlessAdapter {
     await this.db.delete(comicGenres).where(eq(comicGenres.comicId, comicId));
 
     let hasAdultGenre = false;
-    let hasHentaiGenre = false;
 
     for (const name of genreNames) {
       const slug = this.slugify(name);
 
       if (isAdultGenreSlug(slug)) {
         hasAdultGenre = true;
-      }
-      if (isHentaiGenreSlug(slug)) {
-        hasHentaiGenre = true;
       }
 
       let genre = await this.db.query.genres.findFirst({
@@ -556,7 +552,6 @@ export class PeerlessAdapter {
 
     await this.db.update(comics).set({
       isNsfw: hasAdultGenre,
-      isHentai: hasHentaiGenre,
     }).where(eq(comics.id, comicId));
   }
 

@@ -5,7 +5,7 @@ import { comics, comicGenres, genres, comicScans, chapters } from '@/database/sc
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
 import { CacheService, CACHE_TTL, CACHE_KEYS } from '@/cache/cache.service';
-import { ADULT_GENRE_SLUGS, HENTAI_GENRE_SLUGS } from '@/modules/scraper/adapters/base.adapter';
+import { ADULT_GENRE_SLUGS } from '@/modules/scraper/adapters/base.adapter';
 
 export interface ComicFilters {
   search?: string;
@@ -14,7 +14,6 @@ export interface ComicFilters {
   genreIds?: number[];
   genreNames?: string[];
   isNsfw?: boolean;
-  isHentai?: boolean;
   page?: number;
   limit?: number;
   orderBy?: 'recent_chapter' | 'created_at' | 'views' | 'updated_at';
@@ -41,7 +40,7 @@ export class ComicService {
   }
 
   private async findAllFromDb(filters: ComicFilters = {}) {
-    const { search, type, status, genreIds, genreNames, isNsfw, isHentai, page = 1, limit = 20, orderBy = 'recent_chapter', isDesc = true } = filters;
+    const { search, type, status, genreIds, genreNames, isNsfw, page = 1, limit = 20, orderBy = 'recent_chapter', isDesc = true } = filters;
     const offset = (page - 1) * limit;
 
     const conditions = [];
@@ -66,12 +65,8 @@ export class ComicService {
       conditions.push(eq(comics.isNsfw, isNsfw));
     }
 
-    // isHentai filter: if explicitly true, show only hentai; otherwise always exclude hentai
-    if (isHentai === true) {
-      conditions.push(eq(comics.isHentai, true));
-    } else {
-      conditions.push(eq(comics.isHentai, false));
-    }
+    // Always exclude hentai comics
+    conditions.push(eq(comics.isHentai, false));
 
     if (genreNames?.length) {
       const genreRecords = await this.db.query.genres.findMany({
@@ -164,16 +159,12 @@ export class ComicService {
 
     // Fallback to pg_trgm similarity when tsquery returns no results
     if (orderedComicIds.length === 0 && search) {
-      // Build non-search conditions (type, status, nsfw, hentai, genres)
+      // Build non-search conditions (type, status, nsfw, genres)
       const baseConditions: (typeof conditions[number])[] = [];
       if (type) baseConditions.push(eq(comics.type, type));
       if (status) baseConditions.push(eq(comics.status, status));
       if (isNsfw !== undefined) baseConditions.push(eq(comics.isNsfw, isNsfw));
-      if (isHentai === true) {
-        baseConditions.push(eq(comics.isHentai, true));
-      } else {
-        baseConditions.push(eq(comics.isHentai, false));
-      }
+      baseConditions.push(eq(comics.isHentai, false));
 
       const similarityExpr = sql`GREATEST(
         similarity(${comics.title}, unaccent(${search})),
@@ -360,24 +351,17 @@ export class ComicService {
     );
   }
 
-  async getTrending(limit = 10, isNsfw?: boolean, isHentai?: boolean) {
+  async getTrending(limit = 10, isNsfw?: boolean) {
     const nsfwKey = isNsfw === undefined ? 'all' : isNsfw ? 'nsfw' : 'safe';
-    const hentaiKey = isHentai === true ? 'hentai' : 'nohentai';
-    const cacheKey = `${CACHE_KEYS.COMIC_TRENDING}:${limit}:${nsfwKey}:${hentaiKey}`;
+    const cacheKey = `${CACHE_KEYS.COMIC_TRENDING}:${limit}:${nsfwKey}`;
 
     return this.cacheService.wrap(
       cacheKey,
       () => {
-        const conditions = [];
+        const conditions = [eq(comics.isHentai, false)];
         if (isNsfw !== undefined) conditions.push(eq(comics.isNsfw, isNsfw));
-        if (isHentai === true) {
-          conditions.push(eq(comics.isHentai, true));
-        } else {
-          conditions.push(eq(comics.isHentai, false));
-        }
-        const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
         return this.db.query.comics.findMany({
-          where: whereClause,
+          where: and(...conditions),
           orderBy: [desc(comics.views)],
           limit,
           with: {
@@ -391,24 +375,17 @@ export class ComicService {
     );
   }
 
-  async getRecent(limit = 10, isNsfw?: boolean, isHentai?: boolean) {
+  async getRecent(limit = 10, isNsfw?: boolean) {
     const nsfwKey = isNsfw === undefined ? 'all' : isNsfw ? 'nsfw' : 'safe';
-    const hentaiKey = isHentai === true ? 'hentai' : 'nohentai';
-    const cacheKey = `${CACHE_KEYS.COMIC_RECENT}:${limit}:${nsfwKey}:${hentaiKey}`;
+    const cacheKey = `${CACHE_KEYS.COMIC_RECENT}:${limit}:${nsfwKey}`;
 
     return this.cacheService.wrap(
       cacheKey,
       () => {
-        const conditions = [];
+        const conditions = [eq(comics.isHentai, false)];
         if (isNsfw !== undefined) conditions.push(eq(comics.isNsfw, isNsfw));
-        if (isHentai === true) {
-          conditions.push(eq(comics.isHentai, true));
-        } else {
-          conditions.push(eq(comics.isHentai, false));
-        }
-        const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
         return this.db.query.comics.findMany({
-          where: whereClause,
+          where: and(...conditions),
           orderBy: [desc(comics.updatedAt)],
           limit,
           with: {
@@ -422,34 +399,29 @@ export class ComicService {
     );
   }
 
-  async getRecentWithChapters(limit = 20, isNsfw?: boolean, isHentai?: boolean) {
+  async getRecentWithChapters(limit = 20, isNsfw?: boolean) {
     const nsfwKey = isNsfw === undefined ? 'all' : isNsfw ? 'nsfw' : 'safe';
-    const hentaiKey = isHentai === true ? 'hentai' : 'nohentai';
-    const cacheKey = `${CACHE_KEYS.COMIC_RECENT_CHAPTERS}:${limit}:${nsfwKey}:${hentaiKey}`;
+    const cacheKey = `${CACHE_KEYS.COMIC_RECENT_CHAPTERS}:${limit}:${nsfwKey}`;
 
     return this.cacheService.wrap(
       cacheKey,
-      () => this.getRecentWithChaptersFromDb(limit, isNsfw, isHentai),
+      () => this.getRecentWithChaptersFromDb(limit, isNsfw),
       CACHE_TTL.SHORT, // 10 minutes - frequently updated
     );
   }
 
-  private async getRecentWithChaptersFromDb(limit = 20, isNsfw?: boolean, isHentai?: boolean) {
+  private async getRecentWithChaptersFromDb(limit = 20, isNsfw?: boolean) {
     // Step 1: Get comic_scan_ids ordered by most recent chapter, filtered in SQL
     const nsfwCondition = isNsfw !== undefined
       ? sql` AND c.is_nsfw = ${isNsfw}`
       : sql``;
-
-    const hentaiCondition = isHentai === true
-      ? sql` AND c.is_hentai = true`
-      : sql` AND c.is_hentai = false`;
 
     const recentScansResult = await this.db.execute(sql`
       SELECT cs.id as comic_scan_id, MAX(ch.created_at) as last_chapter_at
       FROM chapters ch
       INNER JOIN comic_scans cs ON ch.comic_scan_id = cs.id
       INNER JOIN comics c ON cs.comic_id = c.id
-      WHERE 1=1 ${nsfwCondition} ${hentaiCondition}
+      WHERE c.is_hentai = false ${nsfwCondition}
       GROUP BY cs.id
       ORDER BY last_chapter_at DESC
       LIMIT ${limit}
@@ -526,8 +498,8 @@ export class ComicService {
       .filter(Boolean);
   }
 
-  async getAllGenres(includeAdult = false, includeHentai = false) {
-    const cacheKey = `${CACHE_KEYS.GENRES}:${includeAdult ? 'adult' : 'safe'}:${includeHentai ? 'hentai' : 'nohentai'}`;
+  async getAllGenres(includeAdult = false) {
+    const cacheKey = `${CACHE_KEYS.GENRES}:${includeAdult ? 'adult' : 'safe'}`;
 
     return this.cacheService.wrap(
       cacheKey,
@@ -536,19 +508,11 @@ export class ComicService {
           orderBy: [genres.name],
         });
 
-        if (includeHentai) {
-          // Hidden mode: show all genres
+        if (includeAdult) {
           return allGenres;
         }
 
-        if (includeAdult) {
-          // Adult mode: show adult genres but hide hentai
-          return allGenres.filter(g =>
-            !HENTAI_GENRE_SLUGS.includes(g.slug.toLowerCase())
-          );
-        }
-
-        // Safe mode: filter out all adult genres (which includes hentai)
+        // Safe mode: filter out all adult genres
         return allGenres.filter(g =>
           !ADULT_GENRE_SLUGS.includes(g.slug.toLowerCase())
         );
@@ -600,19 +564,18 @@ export class ComicService {
     return comicScan;
   }
 
-  async getRecommendations(comicId: number, limit = 10, isNsfw?: boolean, isHentai?: boolean) {
+  async getRecommendations(comicId: number, limit = 10, isNsfw?: boolean) {
     const nsfwKey = isNsfw === undefined ? 'all' : isNsfw ? 'nsfw' : 'safe';
-    const hentaiKey = isHentai === true ? 'hentai' : 'nohentai';
-    const cacheKey = `${CACHE_KEYS.COMIC_RECOMMENDATIONS}:${comicId}:${limit}:${nsfwKey}:${hentaiKey}`;
+    const cacheKey = `${CACHE_KEYS.COMIC_RECOMMENDATIONS}:${comicId}:${limit}:${nsfwKey}`;
 
     return this.cacheService.wrap(
       cacheKey,
-      () => this.getRecommendationsFromDb(comicId, limit, isNsfw, isHentai),
+      () => this.getRecommendationsFromDb(comicId, limit, isNsfw),
       CACHE_TTL.LONG, // 2 hours
     );
   }
 
-  private async getRecommendationsFromDb(comicId: number, limit = 10, isNsfw?: boolean, isHentai?: boolean) {
+  private async getRecommendationsFromDb(comicId: number, limit = 10, isNsfw?: boolean) {
     // Get the comic's genres
     const comicGenreRecords = await this.db.query.comicGenres.findMany({
       where: eq(comicGenres.comicId, comicId),
@@ -633,15 +596,9 @@ export class ComicService {
         .filter(id => id !== comicId);
 
       if (comicIds.length > 0) {
-        // Build where clause with NSFW + hentai filter
-        const conditions = [inArray(comics.id, comicIds)];
+        const conditions = [inArray(comics.id, comicIds), eq(comics.isHentai, false)];
         if (isNsfw !== undefined) {
           conditions.push(eq(comics.isNsfw, isNsfw));
-        }
-        if (isHentai === true) {
-          conditions.push(eq(comics.isHentai, true));
-        } else {
-          conditions.push(eq(comics.isHentai, false));
         }
 
         // Get comics ordered by views (popularity within same genres)
@@ -663,18 +620,12 @@ export class ComicService {
       const existingIds = recommendedComics.map(c => c.id);
       existingIds.push(comicId); // Exclude current comic
 
-      // Build conditions for fallback
-      const conditions = [];
+      const conditions = [eq(comics.isHentai, false)];
       if (existingIds.length > 0) {
         conditions.push(sql`${comics.id} NOT IN (${sql.join(existingIds.map(id => sql`${id}`), sql`, `)})`);
       }
       if (isNsfw !== undefined) {
         conditions.push(eq(comics.isNsfw, isNsfw));
-      }
-      if (isHentai === true) {
-        conditions.push(eq(comics.isHentai, true));
-      } else {
-        conditions.push(eq(comics.isHentai, false));
       }
 
       const popularComics = await this.db.query.comics.findMany({
@@ -704,22 +655,16 @@ export class ComicService {
     }));
   }
 
-  async getPopular(limit = 10, isNsfw?: boolean, isHentai?: boolean) {
+  async getPopular(limit = 10, isNsfw?: boolean) {
     const nsfwKey = isNsfw === undefined ? 'all' : isNsfw ? 'nsfw' : 'safe';
-    const hentaiKey = isHentai === true ? 'hentai' : 'nohentai';
-    const cacheKey = `${CACHE_KEYS.COMIC_POPULAR}:${limit}:${nsfwKey}:${hentaiKey}`;
+    const cacheKey = `${CACHE_KEYS.COMIC_POPULAR}:${limit}:${nsfwKey}`;
 
     return this.cacheService.wrap(
       cacheKey,
       async () => {
-        const conditions = [];
+        const conditions = [eq(comics.isHentai, false)];
         if (isNsfw !== undefined) conditions.push(eq(comics.isNsfw, isNsfw));
-        if (isHentai === true) {
-          conditions.push(eq(comics.isHentai, true));
-        } else {
-          conditions.push(eq(comics.isHentai, false));
-        }
-        const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+        const whereClause = and(...conditions);
         const popularComics = await this.db.query.comics.findMany({
           where: whereClause,
           orderBy: [desc(comics.views)],
@@ -745,56 +690,6 @@ export class ComicService {
       },
       CACHE_TTL.LONG, // 2 hours
     );
-  }
-
-  /**
-   * Update isNsfw and isHentai flags for all existing comics based on their genres
-   * Returns the number of comics updated
-   */
-  async syncFlags(): Promise<{ updated: number; details: Array<{ id: number; title: string; isNsfw: boolean; isHentai: boolean }> }> {
-    // Get all adult and hentai genre IDs
-    const adultGenreRecords = await this.db.query.genres.findMany({
-      where: inArray(genres.slug, ADULT_GENRE_SLUGS),
-    });
-    const adultGenreIds = adultGenreRecords.map(g => g.id);
-
-    const hentaiGenreRecords = await this.db.query.genres.findMany({
-      where: inArray(genres.slug, HENTAI_GENRE_SLUGS),
-    });
-    const hentaiGenreIds = hentaiGenreRecords.map(g => g.id);
-
-    // Get all comics with their genres
-    const allComics = await this.db.query.comics.findMany({
-      with: {
-        comicGenres: true,
-      },
-    });
-
-    const updated: Array<{ id: number; title: string; isNsfw: boolean; isHentai: boolean }> = [];
-
-    for (const comic of allComics) {
-      const hasAdultGenre = comic.comicGenres.some(cg => adultGenreIds.includes(cg.genreId));
-      const hasHentaiGenre = comic.comicGenres.some(cg => hentaiGenreIds.includes(cg.genreId));
-
-      if (comic.isNsfw !== hasAdultGenre || comic.isHentai !== hasHentaiGenre) {
-        await this.db.update(comics).set({
-          isNsfw: hasAdultGenre,
-          isHentai: hasHentaiGenre,
-        }).where(eq(comics.id, comic.id));
-
-        updated.push({
-          id: comic.id,
-          title: comic.title,
-          isNsfw: hasAdultGenre,
-          isHentai: hasHentaiGenre,
-        });
-      }
-    }
-
-    // Clear all comic-related caches
-    await this.cacheService.invalidateComicCache();
-
-    return { updated: updated.length, details: updated };
   }
 
   /**
