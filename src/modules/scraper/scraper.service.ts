@@ -27,9 +27,9 @@ export class ScraperService implements OnModuleInit {
   async onModuleInit() {
     this.logger.log('Server started. Triggering initial scrape tasks...');
 
-    // this.scrapeIkigai(1, 5).catch(err => this.logger.error(`Initial Ikigai scrape failed: ${err}`));
-    // this.scrapeOlympus(1, 3).catch(err => this.logger.error(`Initial Olympus scrape failed: ${err}`));
-    this.scrapePeerless(1,2).catch(err => this.logger.error(`Initial Peerless scrape failed: ${err}`));
+    this.scrapeIkigai(1, 5).catch(err => this.logger.error(`Initial Ikigai scrape failed: ${err}`));
+    this.scrapeOlympus(1, 3).catch(err => this.logger.error(`Initial Olympus scrape failed: ${err}`));
+    // this.scrapePeerless(1,2).catch(err => this.logger.error(`Initial Peerless scrape failed: ${err}`));
   }
 
   getStatus() {
@@ -65,7 +65,7 @@ export class ScraperService implements OnModuleInit {
   /**
    * Scheduled scraping - Ikigai every hour
    */
-  // @Cron(CronExpression.EVERY_HOUR)
+  @Cron(CronExpression.EVERY_HOUR)
   async scheduledIkigai() {
     if (!this.queue.isRunning('ikigai')) {
       this.logger.log('Starting scheduled Ikigai scrape');
@@ -76,7 +76,7 @@ export class ScraperService implements OnModuleInit {
   /**
    * Scheduled scraping - Olympus every 2 hours
    */
-  // @Cron(CronExpression.EVERY_2_HOURS)
+  @Cron(CronExpression.EVERY_2_HOURS)
   async scheduledOlympus() {
     if (!this.queue.isRunning('olympus')) {
       this.logger.log('Starting scheduled Olympus scrape');
