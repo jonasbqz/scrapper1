@@ -24,6 +24,7 @@ export const comicTypeEnum = pgEnum('comic_type', ['manga', 'manhwa', 'manhua'])
 export const comicStatusEnum = pgEnum('comic_status', ['ongoing', 'completed', 'hiatus', 'cancelled']);
 export const bookmarkStatusEnum = pgEnum('bookmark_status', ['reading', 'completed', 'dropped', 'plan_to_read']);
 export const languageEnum = pgEnum('language', ['en', 'es', 'pt']);
+export const userPlanEnum = pgEnum('user_plan', ['basic', 'premium']);
 
 // Profiles (linked to better-auth user)
 export const profiles = pgTable('profiles', {
@@ -37,6 +38,8 @@ export const profiles = pgTable('profiles', {
   dateOfBirth: date('date_of_birth'),
   isBanned: boolean('is_banned').default(false),
   isAdultContent: boolean('is_adult_content').default(false),
+  plan: userPlanEnum('plan').default('basic'),
+  premiumExpireAt: timestamp('premium_expire_at'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 }, (table) => ({

@@ -12,6 +12,11 @@ import { isAdultGenreSlug } from './base.adapter';
 const M440_ORIGIN = 'https://m440.in';
 const M440_IMAGE_CDN = 'https://s1.m440.in';
 
+/** Check if a genre/category name is specifically "hentai" */
+function isHentaiCategory(categoryName: string): boolean {
+  return categoryName.toLowerCase().trim() === '33';
+}
+
 /** Replica del objeto CryptoJSAesJson del sitio */
 const CryptoJSAesJson = {
   stringify(cipherParams: any): string {
@@ -63,7 +68,7 @@ export class PeerlessAdapter {
 
   constructor(
     private db: NodePgDatabase<typeof schema>,
-    private delayMs: number = 200,
+    private delayMs: number = 400,
     baseUrl?: string,
   ) {
     this.baseUrl = baseUrl || process.env.SCRAPER_PEERLESS_URL || M440_ORIGIN;
@@ -141,6 +146,13 @@ export class PeerlessAdapter {
         for (const item of json.data) {
           if (item.manga_chapters === 0) continue;
 
+          // Skip hentai/adult content based on categories from listing
+          const hasHentaiCategory = item.categories?.some(cat => isHentaiCategory(cat));
+          if (hasHentaiCategory) {
+            this.logger.debug(`Skipping hentai comic from listing: ${item.manga_name} (categories: ${item.categories.join(', ')})`);
+            continue;
+          }
+
           const comicUrl = `${this.baseUrl}/manga/${item.manga_slug}`;
           if (!seen.has(comicUrl)) {
             seen.add(comicUrl);
@@ -151,7 +163,7 @@ export class PeerlessAdapter {
         this.logger.debug(`Page ${page}: found ${json.data.filter(i => i.manga_chapters > 0).length} comics with chapters`);
 
         if (page >= json.totalPages) break;
-        await this.delay(80);
+        await this.delay(200);
       } catch (error) {
         this.logger.error(`Failed to fetch listing page ${page}: ${error}`);
         break;
@@ -168,6 +180,13 @@ export class PeerlessAdapter {
     const comic = this.parseComicFromHtml($, url);
     if (!comic.title) {
       throw new Error('Could not parse comic title');
+    }
+
+    // Skip hentai/adult content based on parsed genres
+    const hasHentaiGenre = comic.genres.some(g => isHentaiCategory(g));
+    if (hasHentaiGenre) {
+      this.logger.log(`⛔ Skipping hentai comic: ${comic.title} (genres: ${comic.genres.join(', ')})`);
+      return;
     }
 
     this.logger.log(`Scraping comic: ${comic.title}`);
@@ -205,7 +224,7 @@ export class PeerlessAdapter {
         } else {
           emptyCount++;
         }
-        await this.delay(100);
+        await this.delay(400);
       } catch (error) {
         this.logger.warn(`Failed to scrape chapter ${chapterItem.url}: ${error}`);
       }

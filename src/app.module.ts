@@ -15,7 +15,7 @@ import { ChapterLikesModule } from './modules/chapter-likes/chapter-likes.module
 import { CommentsModule } from './modules/comments/comments.module';
 import { PlaylistsModule } from './modules/playlists/playlists.module';
 import { DownloadsModule } from './modules/downloads/downloads.module';
-
+import { PaymentModule } from './modules/payment/payment.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -37,6 +37,7 @@ import { DownloadsModule } from './modules/downloads/downloads.module';
     CommentsModule,
     PlaylistsModule,
     DownloadsModule,
+    PaymentModule,
   ],
 })
 export class AppModule {}
