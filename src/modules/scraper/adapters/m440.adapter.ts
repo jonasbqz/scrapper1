@@ -7,7 +7,7 @@ import type * as schema from '@/database/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 import { comics, chapters, comicScans, scanGroups, genres, comicGenres } from '@/database/schema';
 import type { ScrapedComic, ScrapedChapter, ChapterListItem, ScraperResult } from '../scraper.types';
-import { isAdultGenreSlug } from './base.adapter';
+import { isAdultGenreSlug, BaseScraperAdapter } from './base.adapter';
 
 const M440_ORIGIN = 'https://m440.in';
 const M440_IMAGE_CDN = 'https://s1.m440.in';
@@ -61,18 +61,21 @@ interface M440ListingResponse {
   totalPages: number;
 }
 
-export class PeerlessAdapter {
+export class PeerlessAdapter extends BaseScraperAdapter {
   private readonly logger = new Logger(PeerlessAdapter.name);
   private scanGroupId: number | null = null;
   private baseUrl: string;
 
   constructor(
-    private db: NodePgDatabase<typeof schema>,
-    private delayMs: number = 400,
+    protected db: NodePgDatabase<typeof schema>,
+    protected delayMs: number = 400,
     baseUrl?: string,
   ) {
+    super(db, delayMs);
     this.baseUrl = baseUrl || process.env.SCRAPER_PEERLESS_URL || M440_ORIGIN;
   }
+
+  getName() { return 'Peerless'; }
 
   async scrape(startPage = 1, endPage = 10): Promise<ScraperResult> {
     const result: ScraperResult = { comics: 0, chapters: 0, errors: [] };
@@ -670,16 +673,4 @@ export class PeerlessAdapter {
     return parts[parts.length - 1] || parts[parts.length - 2] || '';
   }
 
-  private slugify(text: string): string {
-    return text
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '');
-  }
-
-  private delay(ms?: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms || this.delayMs));
-  }
 }

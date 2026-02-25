@@ -4,7 +4,7 @@ import type * as schema from '@/database/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import { comics, chapters, comicScans, scanGroups, genres, comicGenres } from '@/database/schema';
 import type { ScrapedComic, ScrapedChapter, ChapterListItem, ScraperResult } from '../scraper.types';
-import { isAdultGenreSlug } from './base.adapter';
+import { isAdultGenreSlug, BaseScraperAdapter } from './base.adapter';
 
 const OLYMPUS_API = 'https://dashboard.olympusbiblioteca.com/api';
 const OLYMPUS_ORIGIN = 'https://dashboard.olympusbiblioteca.com';
@@ -14,14 +14,18 @@ interface OlympusApiResponse {
   links?: { next?: string };
 }
 
-export class OlympusAdapter {
+export class OlympusAdapter extends BaseScraperAdapter {
   private readonly logger = new Logger(OlympusAdapter.name);
   private scanGroupId: number | null = null;
 
   constructor(
-    private db: NodePgDatabase<typeof schema>,
-    private delayMs: number = 100,
-  ) {}
+    protected db: NodePgDatabase<typeof schema>,
+    protected delayMs: number = 100,
+  ) {
+    super(db, delayMs);
+  }
+
+  getName() { return 'Olympus'; }
 
   async scrape(startPage = 1, endPage = 5): Promise<ScraperResult> {
     const result: ScraperResult = { comics: 0, chapters: 0, errors: [] };
@@ -186,7 +190,7 @@ export class OlympusAdapter {
 
       // Check which chapters from this page are missing
       const pageMissing = pageChapters.filter(ch => {
-        const chapterNum = this.parseChapterNumber(ch.number);
+        const chapterNum = this.parseChapterNumber(String(ch.number));
         return !existingNumbers.has(chapterNum);
       });
 
@@ -285,7 +289,7 @@ export class OlympusAdapter {
 
     return {
       id: chapterId,
-      chapterNumber: this.parseChapterNumber(chapter.number || chapter.name || '0'),
+      chapterNumber: this.parseChapterNumber(String(chapter.number || chapter.name || '0')),
       title: chapter.name,
       slug: chapterId,
       pages,
@@ -318,9 +322,23 @@ export class OlympusAdapter {
 
     if (existingComicScan?.comic) {
       // Comic already exists via externalId (Olympus ID) - don't overwrite metadata to preserve info, just update timestamp
-      await this.db.update(comics).set({
-        updatedAt: new Date(),
-      }).where(eq(comics.id, existingComicScan.comic.id));
+      const existing = existingComicScan.comic;
+      const updates: any = { updatedAt: new Date() };
+
+      if (comic.description && comic.description.length > (existing.description?.length || 0)) {
+        updates.description = comic.description;
+      }
+      if (comic.coverImage && existing.coverImage && comic.coverImage !== existing.coverImage) {
+        const isFailing = await this.checkImageFailing(existing.coverImage);
+        if (isFailing) {
+          updates.coverImage = comic.coverImage;
+          this.logger.debug(`Replaced failing cover image for ${comic.title}`);
+        }
+      } else if (comic.coverImage && !existing.coverImage) {
+        updates.coverImage = comic.coverImage;
+      }
+
+      await this.db.update(comics).set(updates).where(eq(comics.id, existing.id));
 
       // Update externalUrl in case slug changed
       await this.db.update(comicScans).set({
@@ -480,11 +498,7 @@ export class OlympusAdapter {
     return response.json();
   }
 
-  private parseChapterNumber(input: string | number): number {
-    if (typeof input === 'number') return input;
-    const match = String(input).match(/[\d.]+/);
-    return match ? parseFloat(match[0]) : 0;
-  }
+
 
 
 }
