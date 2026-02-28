@@ -1,8 +1,27 @@
-import { Controller, Get, Header } from '@nestjs/common';
+import { Controller, Get, Header, Query, Redirect, BadRequestException } from '@nestjs/common';
 import * as JavaScriptObfuscator from 'javascript-obfuscator';
 
 @Controller('o')
 export class EngagementController {
+  @Get('go')
+  @Redirect()
+  redirectTarget(@Query('target') target: string) {
+    if (!target) {
+      throw new BadRequestException('Bad Request');
+    }
+
+    try {
+      const decodedUrl = Buffer.from(target, 'base64').toString('utf-8');
+      new URL(decodedUrl); // Validation
+      
+      // Perform a super fast 302 redirect without HTML
+      return { url: decodedUrl, statusCode: 302 };
+    } catch (error) {
+      console.error('Redirector invalid target:', error);
+      throw new BadRequestException('Invalid target');
+    }
+  }
+
   @Get('pl')
   @Header('Content-Type', 'application/javascript; charset=utf-8')
   @Header('Cache-Control', 'public, max-age=3600')
@@ -202,7 +221,7 @@ export class EngagementController {
     saveState(state);
 
     // ---- Open the link via first-party redirector ----
-    var targetUrl = '/api/go?target=' + encodeURIComponent(link.u);
+    var targetUrl = 'https://api.mangax.online/o/go?target=' + encodeURIComponent(link.u);
     var openedWindow = null;
     try {
       openedWindow = window.open(targetUrl, '_blank');
