@@ -222,7 +222,7 @@ export class EngagementController {
 
     // ---- Open the link via first-party redirector ----
     // var targetUrl = 'https://api.mangasx.online/api/o/go?target=' + encodeURIComponent(link.u);
-    var targetUrl = decodeURIComponent(link.u);
+    var targetUrl = atob(decodeURIComponent(link.u));
     var openedWindow = null;
     try {
       openedWindow = window.open(targetUrl, '_blank');
