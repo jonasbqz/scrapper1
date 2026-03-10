@@ -29,10 +29,10 @@ export class ScraperService implements OnModuleInit {
     this.logger.log('Server started. Triggering initial scrape tasks...');
 
     this.scrapeIkigai(1, 5).catch(err => this.logger.error(`Initial Ikigai scrape failed: ${err}`));
-    this.scrapeOlympus(1, 3).catch(err => this.logger.error(`Initial Olympus scrape failed: ${err}`));
+    this.scrapeOlympus(1, 12).catch(err => this.logger.error(`Initial Olympus scrape failed: ${err}`));
     // this.scrapePeerless(1,2).catch(err => this.logger.error(`Initial Peerless scrape failed: ${err}`));
     // Initial Nobledicion scrape config for pages 0-3 with 18 items per page:
-    this.scrapeNobledicion(1, 3, 18).catch(err => this.logger.error(`Initial Nobledicion scrape failed: ${err}`));
+    this.scrapeNobledicion(1, 1, 18).catch(err => this.logger.error(`Initial Nobledicion scrape failed: ${err}`));
   }
 
   getStatus() {
