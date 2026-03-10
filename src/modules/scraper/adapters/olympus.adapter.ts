@@ -6,7 +6,7 @@ import { comics, chapters, comicScans, scanGroups, genres, comicGenres } from '@
 import type { ScrapedComic, ScrapedChapter, ChapterListItem, ScraperResult } from '../scraper.types';
 import { isAdultGenreSlug, BaseScraperAdapter } from './base.adapter';
 
-const OLYMPUS_API = 'https://m440-proxy.platformoctopus.workers.dev/';
+const OLYMPUS_API = 'https://m440-proxy.platformoctopus.workers.dev/api';
 const OLYMPUS_ORIGIN = 'https://dashboard.olympusbiblioteca.com';
 
 interface OlympusApiResponse {
