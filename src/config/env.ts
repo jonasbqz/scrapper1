@@ -5,4 +5,5 @@ export const env = {
   jwtJwksUrl: process.env.JWT_JWKS_URL!,
   scraperConcurrentLimit: Number(process.env.SCRAPER_CONCURRENT_LIMIT) || 1,
   scraperDelayMs: Number(process.env.SCRAPER_DELAY_MS) || 2000,
+  redisUrl: process.env.REDIS_URL,
 } as const;
