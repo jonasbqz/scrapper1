@@ -44,6 +44,21 @@ function parseRedisUrl(url: string) {
             port: redisConfig.port,
             password: redisConfig.password,
             ttl: 60, // default TTL in seconds for ioredis
+            // Fail fast — don't retry 20 times per request when Redis is down
+            maxRetriesPerRequest: 0,
+            // Don't queue commands while disconnected (avoids memory buildup)
+            enableOfflineQueue: false,
+            // Connect timeout
+            connectTimeout: 3000,
+            // Stop trying to reconnect after a few failed attempts
+            maxLoadingRetryTime: 5000,
+            retryStrategy: (times: number) => {
+              if (times > 3) {
+                // Stop reconnecting, let the in-memory fallback kick in
+                return null;
+              }
+              return Math.min(times * 500, 2000);
+            },
           }),
         };
       },

@@ -41,7 +41,6 @@ export class AuthGuard implements CanActivate {
       // Auto-create profile if it doesn't exist
       if (!profile) {
         try {
-          // Generate a unique username from email or name
           const baseUsername = (session.user.name || session.user.email?.split('@')[0] || 'user')
             .toLowerCase()
             .replace(/[^a-z0-9]/g, '')
@@ -49,16 +48,23 @@ export class AuthGuard implements CanActivate {
           const uniqueSuffix = Date.now().toString(36).substring(-4);
           const username = `${baseUsername}${uniqueSuffix}`;
 
-          const [newProfile] = await this.db.insert(profiles).values({
+          // onConflictDoNothing makes this idempotent under concurrent requests
+          await this.db.insert(profiles).values({
             userId: session.user.id,
             username,
             visibleName: session.user.name || null,
             avatarUrl: session.user.image || null,
             language: 'es',
-          }).returning();
+          }).onConflictDoNothing();
 
-          profile = newProfile;
-          console.log(`Auto-created profile for user ${session.user.id}: ${username}`);
+          // Re-fetch since onConflictDoNothing doesn't return rows on conflict
+          profile = await this.db.query.profiles.findFirst({
+            where: eq(profiles.userId, session.user.id),
+          }) ?? null;
+
+          if (profile) {
+            console.log(`Auto-created profile for user ${session.user.id}: ${profile.username}`);
+          }
         } catch (err) {
           console.error('Error auto-creating profile:', err);
           // Continue without profile - ProfileGuard will handle the 403
