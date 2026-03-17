@@ -159,8 +159,8 @@ export class ChapterController {
 
       const isPremiumActive =
         profile?.plan === 'premium' &&
-        profile.premiumExpireAt != null &&
-        profile.premiumExpireAt > new Date();
+        (profile.premiumExpireAt === null ||
+          profile.premiumExpireAt > new Date());
 
       if (!isPremiumActive) {
         throw new ForbiddenException(
