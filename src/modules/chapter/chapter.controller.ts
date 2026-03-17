@@ -1,7 +1,31 @@
-import { Controller, Get, NotFoundException, Param, ParseIntPipe } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  BadRequestException,
+  Controller,
+  ForbiddenException,
+  Get,
+  Inject,
+  NotFoundException,
+  Param,
+  ParseIntPipe,
+  Query,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { ChapterService } from './chapter.service';
 import { ComicService } from '../comic/comic.service';
+import { CurrentUser, UserSession } from '../auth/current-user.decorator';
+import { DATABASE_CONNECTION } from '@/database/database.module';
+import { eq } from 'drizzle-orm';
+import { profiles } from '@/database/schema';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type * as schema from '@/database/schema';
+
+/** Allowed count values for the bulk next-chapters endpoint */
+const ALLOWED_COUNTS = [5, 10, 25, 50] as const;
+type AllowedCount = (typeof ALLOWED_COUNTS)[number];
+
+/** Counts that require a valid premium subscription */
+const PREMIUM_COUNTS: AllowedCount[] = [25, 50];
 
 @ApiTags('Chapters')
 @Controller('chapters')
@@ -9,6 +33,8 @@ export class ChapterController {
   constructor(
     private chapterService: ChapterService,
     private comicService: ComicService,
+    @Inject(DATABASE_CONNECTION)
+    private db: NodePgDatabase<typeof schema>,
   ) {}
 
   @Get(':id')
@@ -84,7 +110,61 @@ export class ChapterController {
         prev_chapter_id: nav.prev?.id || null,
         next_chapter_id: nav.next?.id || null,
       }
+    };
+  }
+
+  @Get(':id/pages/next')
+  @ApiOperation({
+    summary: 'Get pages for multiple consecutive chapters (bulk prefetch)',
+    description:
+      'Returns up to `count` consecutive chapters starting from `:id`. ' +
+      'Allowed values: 5, 10 (public) | 25, 50 (requires active premium subscription).',
+  })
+  @ApiQuery({
+    name: 'count',
+    enum: [5, 10, 25, 50],
+    description: 'Number of chapters to fetch (5 | 10 | 25 | 50)',
+  })
+  async getNextPages(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('count', ParseIntPipe) count: number,
+    @CurrentUser() user?: UserSession,
+  ) {
+    // --- Validate count value ---
+    if (!(ALLOWED_COUNTS as readonly number[]).includes(count)) {
+      throw new BadRequestException(
+        `Invalid count. Allowed values: ${ALLOWED_COUNTS.join(', ')}`,
+      );
     }
+
+    // --- Premium counts require authentication + active premium plan ---
+    if ((PREMIUM_COUNTS as number[]).includes(count)) {
+      if (!user?.profileId) {
+        throw new UnauthorizedException(
+          'Authentication required to fetch 25 or 50 chapters at once.',
+        );
+      }
+
+      const profile = await this.db.query.profiles.findFirst({
+        where: eq(profiles.id, user.profileId),
+        columns: { plan: true, premiumExpireAt: true },
+      });
+
+      const isPremiumActive =
+        profile?.plan === 'premium' &&
+        profile.premiumExpireAt != null &&
+        profile.premiumExpireAt > new Date();
+
+      if (!isPremiumActive) {
+        throw new ForbiddenException(
+          'An active premium subscription is required to fetch 25 or 50 chapters at once.',
+        );
+      }
+    }
+
+    const chapters = await this.chapterService.getNextChaptersPages(id, count);
+
+    return { data: chapters };
   }
 
   @Get('comic-scan/:comicScanId')

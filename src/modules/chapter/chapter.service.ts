@@ -1,5 +1,5 @@
 import { Injectable, Inject, NotFoundException } from '@nestjs/common';
-import { eq, desc, sql, and, gt, lt } from 'drizzle-orm';
+import { eq, desc, sql, and, gt, lt, gte } from 'drizzle-orm';
 import { DATABASE_CONNECTION } from '@/database/database.module';
 import { chapters, comicScans } from '@/database/schema';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
@@ -117,6 +117,61 @@ export class ChapterService {
         return chapter;
       },
       CACHE_TTL.STATIC, // 24 hours - pages rarely change
+    );
+  }
+
+  /**
+   * Fetches `count` consecutive chapters (including the starting chapter)
+   * ordered by chapterNumber ASC in a single query.
+   * Allowed counts: 5 | 10 | 25 | 50
+   */
+  async getNextChaptersPages(startId: number, count: number) {
+    const cacheKey = `chapter_next_pages:${startId}:${count}`;
+
+    return this.cacheService.wrap(
+      cacheKey,
+      async () => {
+        // 1. Find the starting chapter to get comicScanId & chapterNumber
+        const start = await this.db.query.chapters.findFirst({
+          where: eq(chapters.id, startId),
+          columns: { id: true, comicScanId: true, chapterNumber: true },
+        });
+
+        if (!start) {
+          throw new NotFoundException('Chapter not found');
+        }
+
+        // 2. Single query: all chapters in the same scan from start onward
+        const rows = await this.db.query.chapters.findMany({
+          where: and(
+            eq(chapters.comicScanId, start.comicScanId),
+            gte(chapters.chapterNumber, start.chapterNumber),
+          ),
+          orderBy: [chapters.chapterNumber],
+          limit: count,
+          columns: {
+            id: true,
+            chapterNumber: true,
+            title: true,
+            urlPages: true,
+            copyrighted: true,
+            slug: true,
+          },
+        });
+
+        // 3. Map results with prev/next ids derived from array positions
+        return rows.map((chapter, index) => ({
+          id: chapter.id,
+          chapter_number: String(chapter.chapterNumber),
+          title: chapter.title,
+          url_pages: chapter.copyrighted ? [] : (chapter.urlPages || []),
+          copyrighted: chapter.copyrighted,
+          pathname: chapter.slug || '',
+          prev_chapter_id: index > 0 ? rows[index - 1].id : null,
+          next_chapter_id: index < rows.length - 1 ? rows[index + 1].id : null,
+        }));
+      },
+      CACHE_TTL.LONG, // 2 hours
     );
   }
 }
