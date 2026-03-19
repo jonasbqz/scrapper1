@@ -27,6 +27,7 @@
         "drizzle-orm": "^0.33.0",
         "ioredis": "^5.4.0",
         "javascript-obfuscator": "^5.3.0",
+        "jose": "^5.9.6",
         "pdfkit": "^0.15.0",
         "pg": "^8.12.0",
         "reflect-metadata": "^0.2.2",
@@ -723,7 +724,7 @@
 
     "jest-worker": ["jest-worker@27.5.1", "", { "dependencies": { "@types/node": "*", "merge-stream": "^2.0.0", "supports-color": "^8.0.0" } }, ""],
 
-    "jose": ["jose@6.1.3", "", {}, ""],
+    "jose": ["jose@5.10.0", "", {}, "sha512-s+3Al/p9g32Iq+oqXxkW//7jk2Vig6FF1CFqzVXoTUXt2qz89YWbL+OwS17NFYEvxC35n0FKeGO2LGYSxeM2Gg=="],
 
     "jpeg-exif": ["jpeg-exif@1.1.4", "", {}, "sha512-a+bKEcCjtuW5WTdgeXFzswSrdqi0jk4XlEtZlx5A94wCoBpFjfFTbo/Tra5SpNCl/YFZPvcV1dJc+TAYeg6ROQ=="],
 
@@ -1202,6 +1203,8 @@
     "@vercel/blob/undici": ["undici@6.23.0", "", {}, "sha512-VfQPToRA5FZs/qJxLIinmU59u0r7LXqoJkCzinq3ckNJp3vKEh7jTWN589YQ5+aoAC/TGRLyJLCPKcLQbM8r9g=="],
 
     "anymatch/picomatch": ["picomatch@2.3.1", "", {}, ""],
+
+    "better-auth/jose": ["jose@6.1.3", "", {}, ""],
 
     "brotli/base64-js": ["base64-js@1.5.1", "", {}, ""],
 
