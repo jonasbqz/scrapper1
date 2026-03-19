@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
 import { DATABASE_CONNECTION } from '@/database/database.module';
-import { profiles } from '@/database/schema';
+import { profiles, session as authSession } from '@/database/schema';
 import { auth } from '@/lib/auth';
 import { JwtDownloadService } from './jwt-download.service';
 
@@ -32,12 +32,27 @@ export class JwtDownloadController {
   })
   async generateDownloadToken(@Req() request: FastifyRequest) {
     // Usar directamente las cabeceras de Fastify de la misma forma que lo hace el AuthGuard
-    const session = await auth.api
+    let session = await auth.api
       .getSession({ headers: request.headers as any })
       .catch((err) => {
         console.error('[jwt-download] Error getSession:', err);
         return null;
       });
+
+    // Fallback: Si better-auth falla debido a restricciones cross-domain o parseo de cabeceras en Fastify, 
+    // verificamos manualmente si el frontend envió un "Authorization: Bearer <token>" e interceptamos la DB.
+    if (!session?.user) {
+      const authHeader = request.headers.authorization;
+      if (typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')) {
+        const tokenStr = authHeader.substring(7).trim();
+        const sessionRecord = await this.db.query.session.findFirst({
+          where: eq(authSession.token, tokenStr),
+        });
+        if (sessionRecord && sessionRecord.userId) {
+          session = { user: { id: sessionRecord.userId } } as any;
+        }
+      }
+    }
 
     if (!session?.user) {
       // Token anónimo
