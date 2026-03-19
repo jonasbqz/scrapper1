@@ -16,9 +16,9 @@ export function getRedisRaw(): Redis | null {
 
   try {
     redisClient = new Redis(url, {
-      maxRetriesPerRequest: 1,
-      lazyConnect: false,
-      enableOfflineQueue: false,
+      maxRetriesPerRequest: 3,
+      // Se elimina enableOfflineQueue: false para que ioredis encole los comandos 
+      // mientras termina de conectarse en los primeros milisegundos de arranque del server.
     });
 
     redisClient.on('error', (err) => {
