@@ -1,16 +1,16 @@
-import { Injectable } from '@nestjs/common';
-import { SignJWT } from 'jose';
-import { randomBytes } from 'crypto';
-import { getRedisRaw } from '@/lib/redis-raw';
+import { Injectable } from "@nestjs/common";
+import { SignJWT } from "jose";
+import { randomBytes } from "crypto";
+import { getRedisRaw } from "@/lib/redis-raw";
 
-const REDIS_KEY = 'JWT_DOWNLOAD';
+const REDIS_KEY = "JWT_DOWNLOAD";
 const SECRET_TTL_SECONDS = 8 * 24 * 60 * 60; // 8 días
-const TOKEN_TTL_SECONDS = 5 * 60; // 5 minutos para usuarios registrados
+const TOKEN_TTL_SECONDS = 20 * 60; // 20 minutos para usuarios registrados
 const ANON_TOKEN_TTL_SECONDS = 10 * 60; // 10 minutos para anónimos
 
 export type DownloadTokenPayload = {
   userId: string | null;
-  plan: 'free' | 'basic' | 'premium';
+  plan: "free" | "basic" | "premium";
   isPremium: boolean;
   premiumExpireAt: string | null;
   oneTimeUse?: boolean;
@@ -26,14 +26,19 @@ export class JwtDownloadService {
         let secret = await redis.get(REDIS_KEY);
 
         if (!secret) {
-          secret = randomBytes(32).toString('hex');
-          await redis.set(REDIS_KEY, secret, 'EX', SECRET_TTL_SECONDS);
-          console.log('[jwt-download] Nuevo secreto JWT_DOWNLOAD generado en Redis.');
+          secret = randomBytes(32).toString("hex");
+          await redis.set(REDIS_KEY, secret, "EX", SECRET_TTL_SECONDS);
+          console.log(
+            "[jwt-download] Nuevo secreto JWT_DOWNLOAD generado en Redis.",
+          );
         }
 
         return new TextEncoder().encode(secret);
       } catch (err) {
-        console.error('[jwt-download] Error leyendo Redis, usando fallback:', err);
+        console.error(
+          "[jwt-download] Error leyendo Redis, usando fallback:",
+          err,
+        );
       }
     }
 
@@ -41,7 +46,7 @@ export class JwtDownloadService {
     const fallback = process.env.JWT_DOWNLOAD_SECRET_FALLBACK;
     if (!fallback) {
       throw new Error(
-        'No hay secreto JWT disponible. Configura REDIS_URL o JWT_DOWNLOAD_SECRET_FALLBACK.',
+        "No hay secreto JWT disponible. Configura REDIS_URL o JWT_DOWNLOAD_SECRET_FALLBACK.",
       );
     }
 
@@ -60,7 +65,7 @@ export class JwtDownloadService {
       premiumExpireAt: payload.premiumExpireAt,
       ...(isAnon ? { oneTimeUse: true } : {}),
     })
-      .setProtectedHeader({ alg: 'HS256' })
+      .setProtectedHeader({ alg: "HS256" })
       .setIssuedAt()
       .setExpirationTime(Math.floor(Date.now() / 1000) + ttl)
       .sign(secret);
