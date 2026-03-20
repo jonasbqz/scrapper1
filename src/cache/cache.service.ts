@@ -1,41 +1,41 @@
-import { Injectable, Inject } from '@nestjs/common';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Cache } from 'cache-manager';
+import { Injectable, Inject } from "@nestjs/common";
+import { CACHE_MANAGER } from "@nestjs/cache-manager";
+import { Cache } from "cache-manager";
 
 // Cache TTL constants (in milliseconds)
 export const CACHE_TTL = {
-  STATIC: 24 * 60 * 60 * 1000, // 24 hours - for genres, static data
-  LONG: 2 * 60 * 60 * 1000, // 2 hours - for comic/chapter details
-  MEDIUM: 30 * 60 * 1000, // 30 minutes - for lists, trending
-  SHORT: 10 * 60 * 1000, // 10 minutes - for frequently updated data
-  VERY_SHORT: 5 * 60 * 1000, // 5 minutes - for counts, user-specific
+  STATIC: 1 * 60 * 60 * 1000, // 1 hours - for genres, static data
+  LONG: 10 * 60 * 1000, // 10 minutes - for comic/chapter details
+  MEDIUM: 5 * 60 * 1000, // 5 minutes - for lists, trending
+  SHORT: 1 * 60 * 1000, // 1 minutes - for frequently updated data
+  VERY_SHORT: 30 * 1000, // 30 seconds - for counts, user-specific
 } as const;
 
 // Cache key prefixes
 export const CACHE_KEYS = {
   // Comics
-  COMIC_LIST: 'comics:list',
-  COMIC_DETAIL: 'comic',
-  COMIC_SLUG: 'comic:slug',
-  COMIC_TRENDING: 'comics:trending',
-  COMIC_RECENT: 'comics:recent',
-  COMIC_RECENT_CHAPTERS: 'comics:recentChapters',
-  COMIC_POPULAR: 'comics:popular',
-  COMIC_RECOMMENDATIONS: 'comic:recommendations',
-  GENRES: 'genres:all',
+  COMIC_LIST: "comics:list",
+  COMIC_DETAIL: "comic",
+  COMIC_SLUG: "comic:slug",
+  COMIC_TRENDING: "comics:trending",
+  COMIC_RECENT: "comics:recent",
+  COMIC_RECENT_CHAPTERS: "comics:recentChapters",
+  COMIC_POPULAR: "comics:popular",
+  COMIC_RECOMMENDATIONS: "comic:recommendations",
+  GENRES: "genres:all",
 
   // Chapters
-  CHAPTER_DETAIL: 'chapter',
-  CHAPTER_PAGES: 'chapter:pages',
-  CHAPTER_NAVIGATION: 'chapter:navigation',
-  CHAPTERS_BY_COMIC_SCAN: 'chapters:comicScan',
+  CHAPTER_DETAIL: "chapter",
+  CHAPTER_PAGES: "chapter:pages",
+  CHAPTER_NAVIGATION: "chapter:navigation",
+  CHAPTERS_BY_COMIC_SCAN: "chapters:comicScan",
 
   // Likes
-  LIKES_COUNT: 'likes:count',
-  CHAPTER_LIKES_COUNT: 'chapter_likes:count',
+  LIKES_COUNT: "likes:count",
+  CHAPTER_LIKES_COUNT: "chapter_likes:count",
 
   // Comments
-  COMMENTS_COUNT: 'comments:count',
+  COMMENTS_COUNT: "comments:count",
 } as const;
 
 @Injectable()
@@ -57,7 +57,11 @@ export class CacheService {
   /**
    * Set value in cache with TTL
    */
-  async set<T>(key: string, value: T, ttl: number = CACHE_TTL.MEDIUM): Promise<void> {
+  async set<T>(
+    key: string,
+    value: T,
+    ttl: number = CACHE_TTL.MEDIUM,
+  ): Promise<void> {
     try {
       await this.cacheManager.set(key, value, ttl);
     } catch (error) {
@@ -86,7 +90,9 @@ export class CacheService {
       if (store.keys && store.del) {
         const keys = await store.keys(pattern);
         if (keys && keys.length > 0) {
-          await Promise.all(keys.map((key: string) => this.cacheManager.del(key)));
+          await Promise.all(
+            keys.map((key: string) => this.cacheManager.del(key)),
+          );
         }
       }
     } catch (error) {
@@ -125,10 +131,15 @@ export class CacheService {
   buildComicListKey(filters: Record<string, any>): string {
     const sortedFilters = Object.keys(filters)
       .sort()
-      .filter((key) => filters[key] !== undefined && filters[key] !== null && filters[key] !== '')
+      .filter(
+        (key) =>
+          filters[key] !== undefined &&
+          filters[key] !== null &&
+          filters[key] !== "",
+      )
       .map((key) => `${key}=${filters[key]}`)
-      .join(':');
-    return `${CACHE_KEYS.COMIC_LIST}:${sortedFilters || 'all'}`;
+      .join(":");
+    return `${CACHE_KEYS.COMIC_LIST}:${sortedFilters || "all"}`;
   }
 
   /**
@@ -148,13 +159,16 @@ export class CacheService {
       patterns.push(`${CACHE_KEYS.COMIC_RECOMMENDATIONS}:${comicId}:*`);
     }
 
-    await Promise.all(patterns.map(pattern => this.delByPattern(pattern)));
+    await Promise.all(patterns.map((pattern) => this.delByPattern(pattern)));
   }
 
   /**
    * Invalidate chapter-related cache entries
    */
-  async invalidateChapterCache(chapterId?: number, comicScanId?: number): Promise<void> {
+  async invalidateChapterCache(
+    chapterId?: number,
+    comicScanId?: number,
+  ): Promise<void> {
     if (chapterId) {
       await this.del(`${CACHE_KEYS.CHAPTER_DETAIL}:${chapterId}`);
       await this.del(`${CACHE_KEYS.CHAPTER_PAGES}:${chapterId}`);
