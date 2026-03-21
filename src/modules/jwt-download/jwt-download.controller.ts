@@ -79,12 +79,11 @@ export class JwtDownloadController {
     const premiumExpireAt = profile?.premiumExpireAt ?? null;
     const isPremium =
       plan === "premium" &&
-      premiumExpireAt !== null &&
-      premiumExpireAt > new Date();
+      (premiumExpireAt === null || premiumExpireAt > new Date());
 
     const token = await this.jwtDownloadService.generateToken({
       userId: session.user.id,
-      plan: isPremium ? "premium" : "basic",
+      plan: plan as "free" | "basic" | "premium",
       isPremium,
       premiumExpireAt: premiumExpireAt?.toISOString() ?? null,
     });
