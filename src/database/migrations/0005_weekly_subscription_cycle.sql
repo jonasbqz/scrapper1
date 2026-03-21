@@ -1,0 +1,1 @@
+ALTER TYPE "premium_cycle" ADD VALUE IF NOT EXISTS '1w';

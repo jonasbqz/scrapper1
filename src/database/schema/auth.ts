@@ -14,6 +14,9 @@ export const user = pgTable('user', {
   image: text('image'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  // Legacy subscription fields still exist in some app DBs and are kept in sync from admin.
+  plan: text('plan').default('basic'),
+  premiumExpireAt: timestamp('premium_expire_at'),
 });
 
 export const session = pgTable('session', {

@@ -12,6 +12,7 @@ import {
   jsonb,
   real,
   date,
+  customType,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
@@ -25,6 +26,14 @@ export const comicStatusEnum = pgEnum('comic_status', ['ongoing', 'completed', '
 export const bookmarkStatusEnum = pgEnum('bookmark_status', ['reading', 'completed', 'dropped', 'plan_to_read']);
 export const languageEnum = pgEnum('language', ['en', 'es', 'pt']);
 export const userPlanEnum = pgEnum('user_plan', ['basic', 'premium']);
+// Keep enum order aligned with the existing Postgres type to avoid destructive Drizzle diffs.
+export const premiumCycleEnum = pgEnum('premium_cycle', ['1m', '3m', '6m', '1w']);
+
+const tsvector = customType<{ data: string }>({
+  dataType() {
+    return 'tsvector';
+  },
+});
 
 // Profiles (linked to better-auth user)
 export const profiles = pgTable('profiles', {
@@ -39,6 +48,8 @@ export const profiles = pgTable('profiles', {
   isBanned: boolean('is_banned').default(false),
   isAdultContent: boolean('is_adult_content').default(false),
   plan: userPlanEnum('plan').default('basic'),
+  premiumCycle: premiumCycleEnum('premium_cycle'),
+  premiumStartedAt: timestamp('premium_started_at'),
   premiumExpireAt: timestamp('premium_expire_at'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
@@ -82,11 +93,16 @@ export const comics = pgTable('comics', {
   isNsfw: boolean('is_nsfw').default(false),
   isHentai: boolean('is_hentai').default(false),
   copyrighted: boolean('copyrighted').default(false),
+  // Managed by the manual full-text-search trigger created in 0003_fulltext_search.sql.
+  searchVector: tsvector('search_vector'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 }, (table) => ({
   slugIdx: index('comics_slug_idx').on(table.slug),
+  searchVectorIdx: index('comics_search_vector_idx').using('gin', table.searchVector.asc().nullsLast().op('tsvector_ops')),
   titleIdx: index('comics_title_idx').on(table.title),
+  titleTrgmIdx: index('comics_title_trgm_idx').using('gin', table.title.asc().nullsLast().op('gin_trgm_ops')),
+  titleAlternativeTrgmIdx: index('comics_title_alt_trgm_idx').using('gin', table.titleAlternative.asc().nullsLast().op('gin_trgm_ops')),
   statusIdx: index('comics_status_idx').on(table.status),
   isHentaiIdx: index('comics_is_hentai_idx').on(table.isHentai),
 }));
