@@ -178,4 +178,45 @@ export class CacheService {
       await this.del(`${CACHE_KEYS.CHAPTERS_BY_COMIC_SCAN}:${comicScanId}`);
     }
   }
+
+  /**
+   * Tracks daily comic views in Redis using Sorted Sets
+   */
+  async incrementDailyView(comicId: number): Promise<void> {
+    try {
+      const store = this.cacheManager.store as any;
+      if (store.client) {
+        const today = new Date().toISOString().split('T')[0];
+        const key = `comic:views:daily:${today}`;
+        await store.client.zincrby(key, 1, comicId.toString());
+        // Set expiry to 2 days (172800 seconds) if it doesn't have one
+        const ttl = await store.client.ttl(key);
+        if (ttl === -1) {
+          await store.client.expire(key, 172800);
+        }
+      }
+    } catch (error) {
+      console.error('Error incrementing daily view in Redis:', error);
+    }
+  }
+
+  /**
+   * Retrieves the top trending comic IDs for the day from Redis
+   */
+  async getDailyTrendingComicIds(limit: number): Promise<number[]> {
+    try {
+      const store = this.cacheManager.store as any;
+      if (store.client) {
+        const today = new Date().toISOString().split('T')[0];
+        const key = `comic:views:daily:${today}`;
+        // zrevrange returns highest scores first
+        const ids = await store.client.zrevrange(key, 0, limit - 1);
+        return ids.map((id: string) => parseInt(id, 10));
+      }
+    } catch (error) {
+      console.error('Error getting daily trending comics from Redis:', error);
+    }
+    return [];
+  }
 }
+

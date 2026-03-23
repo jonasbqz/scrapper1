@@ -113,7 +113,19 @@ export class ComicController {
     return this.comicService.getPopular(limit ? parseInt(limit, 10) : 10, isNsfw);
   }
 
-  @Get(':id/recommendations')
+  @Get('popular-today')
+  @ApiOperation({ summary: 'Get most viewed comics for today' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'nsfw', required: false, type: Boolean, description: 'Filter NSFW content' })
+  async getPopularToday(
+    @Query('limit') limit?: string,
+    @Query('nsfw') nsfw?: string,
+  ) {
+    const isNsfw = nsfw === 'false' ? false : nsfw === 'true' ? true : undefined;
+    return this.comicService.getPopularToday(limit ? parseInt(limit, 10) : 10, isNsfw);
+  }
+
+  @Get(['id/:id/recommendations', ':id(\\d+)/recommendations'])
   @ApiOperation({ summary: 'Get comic recommendations based on genres' })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'nsfw', required: false, type: Boolean, description: 'Filter NSFW content' })
@@ -126,7 +138,7 @@ export class ComicController {
     return this.comicService.getRecommendations(id, limit ? parseInt(limit, 10) : 10, isNsfw);
   }
 
-  @Get(':id')
+  @Get(['id/:id', ':id(\\d+)'])
   @ApiOperation({ summary: 'Get comic by ID' })
   async findById(@Param('id', ParseIntPipe) id: number) {
     await this.comicService.incrementViews(id);

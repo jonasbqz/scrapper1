@@ -1,7 +1,7 @@
 import { Injectable, Inject, NotFoundException } from '@nestjs/common';
 import { eq, desc, asc, and, sql, inArray } from 'drizzle-orm';
 import { DATABASE_CONNECTION } from '@/database/database.module';
-import { comics, comicGenres, genres, comicScans, chapters } from '@/database/schema';
+import { comics, comicGenres, genres, comicScans, chapters, comicViewsHistory } from '@/database/schema';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
 import { CacheService, CACHE_TTL, CACHE_KEYS } from '@/cache/cache.service';
@@ -27,6 +27,14 @@ export class ComicService {
     private db: NodePgDatabase<typeof schema>,
     private cacheService: CacheService,
   ) {}
+
+  private getCurrentDateKey(): string {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
 
   async findAll(filters: ComicFilters = {}) {
     const cacheKey = this.cacheService.buildComicListKey(filters);
@@ -383,6 +391,93 @@ export class ComicService {
     );
   }
 
+  private async getPopularTodayFallback(limit = 10, isNsfw?: boolean) {
+    const conditions = [eq(comics.isHentai, false)];
+    if (isNsfw !== undefined) conditions.push(eq(comics.isNsfw, isNsfw));
+
+    return this.db.query.comics.findMany({
+      where: and(...conditions),
+      orderBy: [desc(comics.views)],
+      limit,
+      columns: {
+        id: true,
+        title: true,
+        slug: true,
+        coverImage: true,
+        isNsfw: true,
+      },
+    });
+  }
+
+  async getPopularToday(limit = 10, isNsfw?: boolean) {
+    const todayStr = this.getCurrentDateKey();
+
+    const topDaily = await this.db.query.comicViewsHistory.findMany({
+      where: eq(comicViewsHistory.date, todayStr),
+      orderBy: [desc(comicViewsHistory.views)],
+      limit: limit * 3,
+      columns: { comicId: true, views: true },
+    });
+
+    if (topDaily.length === 0) {
+      const fallback = await this.getPopularTodayFallback(limit, isNsfw);
+      return fallback.map((comic) => ({
+        id: comic.id,
+        title: comic.title,
+        slug: comic.slug,
+        coverImage: comic.coverImage,
+        viewsToday: 0,
+        isNsfw: comic.isNsfw,
+      }));
+    }
+
+    const topIds = topDaily.map((daily) => daily.comicId);
+    const dailyViewsMap = new Map(
+      topDaily.map((daily) => [daily.comicId, daily.views]),
+    );
+
+    const conditions = [eq(comics.isHentai, false), inArray(comics.id, topIds)];
+    if (isNsfw !== undefined) conditions.push(eq(comics.isNsfw, isNsfw));
+
+    const results = await this.db.query.comics.findMany({
+      where: and(...conditions),
+      columns: {
+        id: true,
+        title: true,
+        slug: true,
+        coverImage: true,
+        isNsfw: true,
+      },
+    });
+
+    const comicMap = new Map(results.map((comic) => [comic.id, comic]));
+    const sortedResults = topIds
+      .map((id) => comicMap.get(id))
+      .filter((comic): comic is NonNullable<typeof comic> => Boolean(comic))
+      .slice(0, limit);
+
+    if (sortedResults.length === 0) {
+      const fallback = await this.getPopularTodayFallback(limit, isNsfw);
+      return fallback.map((comic) => ({
+        id: comic.id,
+        title: comic.title,
+        slug: comic.slug,
+        coverImage: comic.coverImage,
+        viewsToday: 0,
+        isNsfw: comic.isNsfw,
+      }));
+    }
+
+    return sortedResults.map((comic) => ({
+      id: comic.id,
+      title: comic.title,
+      slug: comic.slug,
+      coverImage: comic.coverImage,
+      viewsToday: dailyViewsMap.get(comic.id) ?? 0,
+      isNsfw: comic.isNsfw,
+    }));
+  }
+
   async getRecent(limit = 10, isNsfw?: boolean) {
     const nsfwKey = isNsfw === undefined ? 'all' : isNsfw ? 'nsfw' : 'safe';
     const cacheKey = `${CACHE_KEYS.COMIC_RECENT}:${limit}:${nsfwKey}`;
@@ -489,6 +584,9 @@ export class ComicService {
           comic_status: scan.comic.status,
           comic_type: scan.comic.type,
           is_content_nsfw: scan.comic.isNsfw,
+          views: scan.comic.views || 0,
+          likes: scan.comic.likes || 0,
+          followers: scan.comic.followers || 0,
           comic_scan_id: scan.id,
           comic_scan_title: scan.comic.title,
           language: scan.language,
@@ -534,6 +632,20 @@ export class ComicService {
       .update(comics)
       .set({ views: sql`${comics.views} + 1` })
       .where(eq(comics.id, id));
+
+    // Register this view in the Postgres daily views history table
+    const todayStr = this.getCurrentDateKey();
+    await this.db
+      .insert(comicViewsHistory)
+      .values({
+        comicId: id,
+        date: todayStr,
+        views: 1,
+      })
+      .onConflictDoUpdate({
+        target: [comicViewsHistory.comicId, comicViewsHistory.date],
+        set: { views: sql`${comicViewsHistory.views} + 1` },
+      });
 
     // Invalidate caches that depend on views
     // Don't invalidate on every view to avoid cache thrashing

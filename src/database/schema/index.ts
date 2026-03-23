@@ -245,6 +245,17 @@ export const playlistItems = pgTable('playlist_items', {
   playlistIdx: index('playlist_items_playlist_idx').on(table.playlistId),
 }));
 
+// Comic Views History - Historial de vistas diarias
+export const comicViewsHistory = pgTable('comic_views_history', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  comicId: integer('comic_id').references(() => comics.id, { onDelete: 'cascade' }).notNull(),
+  views: integer('views').default(0).notNull(),
+  date: date('date').notNull(), // Almacena solo la fecha
+}, (table) => ({
+  comicDateIdx: uniqueIndex('comic_views_history_comic_date_idx').on(table.comicId, table.date),
+  dateIdx: index('comic_views_history_date_idx').on(table.date),
+}));
+
 // Relations
 export const profilesRelations = relations(profiles, ({ many }) => ({
   bookmarks: many(bookmarks),
@@ -263,6 +274,7 @@ export const comicsRelations = relations(comics, ({ many }) => ({
   likes: many(likes),
   comments: many(comments),
   playlistItems: many(playlistItems),
+  viewsHistory: many(comicViewsHistory),
 }));
 
 export const comicScansRelations = relations(comicScans, ({ one, many }) => ({
@@ -333,4 +345,9 @@ export const playlistsRelations = relations(playlists, ({ one, many }) => ({
 export const playlistItemsRelations = relations(playlistItems, ({ one }) => ({
   playlist: one(playlists, { fields: [playlistItems.playlistId], references: [playlists.id] }),
   comic: one(comics, { fields: [playlistItems.comicId], references: [comics.id] }),
+}));
+
+// Comic Views History relations
+export const comicViewsHistoryRelations = relations(comicViewsHistory, ({ one }) => ({
+  comic: one(comics, { fields: [comicViewsHistory.comicId], references: [comics.id] }),
 }));
