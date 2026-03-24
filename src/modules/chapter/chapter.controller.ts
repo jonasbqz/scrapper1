@@ -8,6 +8,7 @@ import {
   Param,
   ParseIntPipe,
   Query,
+  Req,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
@@ -20,8 +21,8 @@ import { profiles, session as authSession } from '@/database/schema';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
 import type { FastifyRequest } from 'fastify';
-import { Req } from '@nestjs/common';
 import { JwtDownloadService } from '../jwt-download/jwt-download.service';
+import { RouteProtectionService } from '../route-protection/route-protection.service';
 
 /** Allowed count values for the bulk next-chapters endpoint */
 const ALLOWED_COUNTS = [5, 10, 25, 50] as const;
@@ -39,25 +40,39 @@ export class ChapterController {
     @Inject(DATABASE_CONNECTION)
     private db: NodePgDatabase<typeof schema>,
     private jwtDownloadService: JwtDownloadService,
+    private routeProtectionService: RouteProtectionService,
   ) {}
 
-  @Get(':id')
-  @ApiOperation({ summary: 'Get chapter by ID with navigation' })
-  async findById(@Param('id', ParseIntPipe) id: number) {
-    await this.chapterService.incrementViews(id);
-    const nav = await this.chapterService.getNavigation(id);
-
-    const chapter = nav.current;
+  private async buildChapterResponse(navigation: Awaited<ReturnType<ChapterService['getNavigation']>>) {
+    const chapter = navigation.current;
     const comic = chapter.comicScan?.comic;
 
     let recommendations: any[] = [];
     if (comic?.id) {
       try {
         recommendations = await this.comicService.getRecommendations(comic.id, 10);
-      } catch (e) {
-        // Ignore errors, just return empty recommendations
+      } catch {
+        recommendations = [];
       }
     }
+
+    const comicPath = comic
+      ? await this.routeProtectionService.getComicPath(comic)
+      : null;
+
+    const chapterPath = comic
+      ? await this.routeProtectionService.getChapterPath(comic, chapter)
+      : null;
+
+    const prevChapterPath =
+      comic && navigation.prev
+        ? await this.routeProtectionService.getChapterPath(comic, navigation.prev)
+        : null;
+
+    const nextChapterPath =
+      comic && navigation.next
+        ? await this.routeProtectionService.getChapterPath(comic, navigation.next)
+        : null;
 
     return {
       data: {
@@ -71,14 +86,20 @@ export class ChapterController {
         pathname: chapter.slug || '',
         views: chapter.views || 0,
         likes: 0,
-        prev_chapter_id: nav.prev?.id || null,
-        next_chapter_id: nav.next?.id || null,
+        prev_chapter_id: navigation.prev?.id || null,
+        next_chapter_id: navigation.next?.id || null,
+        prev_chapter_path: prevChapterPath,
+        next_chapter_path: nextChapterPath,
+        chapter_path: chapterPath,
         comic_title: comic?.title || '',
         comic_id: comic?.id || null,
+        comic_slug: comic?.slug || '',
         comic_cover: comic?.coverImage || '',
+        comic_path: comicPath,
         copyrighted: chapter.copyrighted || false,
         is_nsfw: comic?.isNsfw || false,
-        recommendations: recommendations.map(rec => ({
+        protected_route_enabled: comic?.protectedRouteEnabled || false,
+        recommendations: recommendations.map((rec) => ({
           id: rec.id,
           name: rec.title,
           state: rec.status?.toUpperCase() || 'ONGOING',
@@ -86,17 +107,55 @@ export class ChapterController {
           urlCover: rec.coverImage,
           url_cover: rec.coverImage,
           slug: rec.slug,
+          comicPath: rec.comicPath,
           languageName: 'SPANISH',
           views: rec.views || 0,
         })),
-      }
+      },
     };
+  }
+
+  @Get('route/:comicSegment/:chapterSegment')
+  @ApiOperation({ summary: 'Get chapter by protected route with navigation' })
+  async findByRoute(
+    @Param('comicSegment') comicSegment: string,
+    @Param('chapterSegment') chapterSegment: string,
+  ) {
+    const resolved = await this.chapterService.findPublicByRouteSegments(
+      decodeURIComponent(comicSegment),
+      decodeURIComponent(chapterSegment),
+    );
+
+    await this.chapterService.incrementViews(resolved.navigation.current.id);
+    return this.buildChapterResponse(resolved.navigation);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Get chapter by ID with navigation' })
+  async findById(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() request: FastifyRequest,
+  ) {
+    const nav = await this.chapterService.getNavigation(id);
+    await this.routeProtectionService.assertLegacyAccess(
+      nav.current.comicScan?.comic,
+      request.headers,
+    );
+    await this.chapterService.incrementViews(id);
+    return this.buildChapterResponse(nav);
   }
 
   @Get(':id/pages')
   @ApiOperation({ summary: 'Get chapter pages' })
-  async getPages(@Param('id', ParseIntPipe) id: number) {
+  async getPages(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() request: FastifyRequest,
+  ) {
     const nav = await this.chapterService.getNavigation(id);
+    await this.routeProtectionService.assertLegacyAccess(
+      nav.current.comicScan?.comic,
+      request.headers,
+    );
     const chapter = await this.chapterService.getPages(id);
     if (!chapter) {
       throw new NotFoundException('Chapter not found');
@@ -134,6 +193,12 @@ export class ChapterController {
     @Req() request: FastifyRequest,
     @Query('jwtToken') jwtToken?: string,
   ) {
+    const nav = await this.chapterService.getNavigation(id);
+    await this.routeProtectionService.assertLegacyAccess(
+      nav.current.comicScan?.comic,
+      request.headers,
+    );
+
     // --- Validate count value ---
     if (!(ALLOWED_COUNTS as readonly number[]).includes(count)) {
       throw new BadRequestException(
@@ -213,7 +278,12 @@ export class ChapterController {
 
   @Get('comic-scan/:comicScanId')
   @ApiOperation({ summary: 'Get all chapters by comic scan' })
-  async findByComicScan(@Param('comicScanId', ParseIntPipe) comicScanId: number) {
+  async findByComicScan(
+    @Param('comicScanId', ParseIntPipe) comicScanId: number,
+    @Req() request: FastifyRequest,
+  ) {
+    const comicScan = await this.comicService.getComicScanById(comicScanId);
+    await this.routeProtectionService.assertLegacyAccess(comicScan.comic, request.headers);
     return this.chapterService.findByComicScan(comicScanId);
   }
 }

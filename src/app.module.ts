@@ -19,6 +19,7 @@ import { PaymentModule } from './modules/payment/payment.module';
 import { EngagementModule } from './modules/engagement/engagement.module';
 import { JwtDownloadModule } from './modules/jwt-download/jwt-download.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
+import { RouteProtectionModule } from './modules/route-protection/route-protection.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -44,6 +45,7 @@ import { SubscriptionsModule } from './modules/subscriptions/subscriptions.modul
     EngagementModule,
     JwtDownloadModule,
     SubscriptionsModule,
+    RouteProtectionModule,
   ],
 })
 export class AppModule {}

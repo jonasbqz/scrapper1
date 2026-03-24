@@ -5,18 +5,23 @@ import {
   Param,
   Query,
   ParseIntPipe,
-  NotFoundException,
   UseGuards,
+  Req,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags, ApiQuery, ApiResponse } from '@nestjs/swagger';
 import { ComicService, ComicFilters } from './comic.service';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AdminGuard } from '@/modules/auth/admin.guard';
+import { RouteProtectionService } from '@/modules/route-protection/route-protection.service';
+import type { FastifyRequest } from 'fastify';
 
 @ApiTags('Comics')
 @Controller('comics')
 export class ComicController {
-  constructor(private comicService: ComicService) {}
+  constructor(
+    private comicService: ComicService,
+    private routeProtectionService: RouteProtectionService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'Get all comics with filters' })
@@ -138,17 +143,34 @@ export class ComicController {
     return this.comicService.getRecommendations(id, limit ? parseInt(limit, 10) : 10, isNsfw);
   }
 
+  @Get('route/:segment')
+  @ApiOperation({ summary: 'Get comic by protected route segment' })
+  async findByRouteSegment(@Param('segment') segment: string) {
+    const comic = await this.comicService.findPublicByRouteSegment(decodeURIComponent(segment));
+    await this.comicService.incrementViews(comic.id);
+    return comic;
+  }
+
   @Get(['id/:id', ':id(\\d+)'])
   @ApiOperation({ summary: 'Get comic by ID' })
-  async findById(@Param('id', ParseIntPipe) id: number) {
+  async findById(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() request: FastifyRequest,
+  ) {
+    const comic = await this.comicService.findById(id);
+    await this.routeProtectionService.assertLegacyAccess(comic, request.headers);
     await this.comicService.incrementViews(id);
-    return this.comicService.findById(id);
+    return comic;
   }
 
   @Get('slug/:slug')
   @ApiOperation({ summary: 'Get comic by slug' })
-  async findBySlug(@Param('slug') slug: string) {
+  async findBySlug(
+    @Param('slug') slug: string,
+    @Req() request: FastifyRequest,
+  ) {
     const comic = await this.comicService.findBySlug(slug);
+    await this.routeProtectionService.assertLegacyAccess(comic, request.headers);
     await this.comicService.incrementViews(comic.id);
     return comic;
   }

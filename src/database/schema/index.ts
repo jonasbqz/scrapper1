@@ -105,6 +105,7 @@ export const comics = pgTable('comics', {
   views: integer('views').default(0),
   likes: integer('likes').default(0),
   followers: integer('followers').default(0),
+  protectedRouteEnabled: boolean('protected_route_enabled').default(false).notNull(),
   isNsfw: boolean('is_nsfw').default(false),
   isHentai: boolean('is_hentai').default(false),
   copyrighted: boolean('copyrighted').default(false),

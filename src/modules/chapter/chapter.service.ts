@@ -5,6 +5,8 @@ import { chapters, comicScans } from '@/database/schema';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
 import { CacheService, CACHE_TTL, CACHE_KEYS } from '@/cache/cache.service';
+import { ComicService } from '@/modules/comic/comic.service';
+import { RouteProtectionService } from '@/modules/route-protection/route-protection.service';
 
 @Injectable()
 export class ChapterService {
@@ -12,6 +14,8 @@ export class ChapterService {
     @Inject(DATABASE_CONNECTION)
     private db: NodePgDatabase<typeof schema>,
     private cacheService: CacheService,
+    private comicService: ComicService,
+    private routeProtectionService: RouteProtectionService,
   ) {}
 
   async findByComicScan(comicScanId: number) {
@@ -89,6 +93,40 @@ export class ChapterService {
       },
       CACHE_TTL.LONG, // 2 hours
     );
+  }
+
+  async findPublicByRouteSegments(comicSegment: string, chapterSegment: string) {
+    const comic = await this.comicService.resolveComicRouteSegment(comicSegment);
+    const parsedChapter = this.routeProtectionService.parseChapterSegment(chapterSegment);
+
+    if (!parsedChapter.chapterId) {
+      throw new NotFoundException('Chapter not found');
+    }
+
+    const navigation = await this.getNavigation(parsedChapter.chapterId);
+    const chapterComicId = navigation.current.comicScan?.comic?.id;
+
+    if (!chapterComicId || chapterComicId !== comic.id) {
+      throw this.routeProtectionService.createUnavailableException();
+    }
+
+    if (comic.protectedRouteEnabled) {
+      if (!parsedChapter.hasCode || !parsedChapter.code) {
+        throw this.routeProtectionService.createUnavailableException();
+      }
+
+      const currentCode = await this.routeProtectionService.getChapterCode(navigation.current.id);
+      if (parsedChapter.code !== currentCode) {
+        throw this.routeProtectionService.createUnavailableException();
+      }
+    } else if (parsedChapter.hasCode) {
+      throw new NotFoundException('Chapter not found');
+    }
+
+    return {
+      comic,
+      navigation,
+    };
   }
 
   async incrementViews(id: number) {

@@ -6,6 +6,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
 import { CacheService, CACHE_TTL, CACHE_KEYS } from '@/cache/cache.service';
 import { ADULT_GENRE_SLUGS } from '@/modules/scraper/adapters/base.adapter';
+import { RouteProtectionService } from '@/modules/route-protection/route-protection.service';
 
 export interface ComicFilters {
   search?: string;
@@ -26,6 +27,7 @@ export class ComicService {
     @Inject(DATABASE_CONNECTION)
     private db: NodePgDatabase<typeof schema>,
     private cacheService: CacheService,
+    private routeProtectionService: RouteProtectionService,
   ) {}
 
   private getCurrentDateKey(): string {
@@ -34,6 +36,95 @@ export class ComicService {
     const month = String(now.getMonth() + 1).padStart(2, '0');
     const day = String(now.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+  }
+
+  private mapGenresFromComic(comic: any) {
+    return comic.comicGenres?.map((cg: any) => cg.genre) || comic.genres || [];
+  }
+
+  private async buildComicSummary<T extends { id: number; slug: string; protectedRouteEnabled?: boolean | null }>(
+    comic: T,
+  ) {
+    return {
+      ...comic,
+      comicPath: await this.routeProtectionService.getComicPath(comic),
+    };
+  }
+
+  private async buildRecentChapterSummaries<
+    T extends { id: number; slug: string; protectedRouteEnabled?: boolean | null },
+  >(comic: T, recentChapters: Array<{ id: number; [key: string]: any }>) {
+    return Promise.all(
+      recentChapters.map(async (chapter) => ({
+        ...chapter,
+        chapterPath: await this.routeProtectionService.getChapterPath(comic, chapter),
+      })),
+    );
+  }
+
+  private async buildComicDetailPayload(comic: any) {
+    const comicPath = await this.routeProtectionService.getComicPath(comic);
+    const comicScans = await Promise.all(
+      (comic.comicScans || []).map(async (comicScan: any) => ({
+        ...comicScan,
+        chapters: await Promise.all(
+          (comicScan.chapters || []).map(async (chapter: any) => ({
+            ...chapter,
+            chapterPath: await this.routeProtectionService.getChapterPath(comic, chapter),
+          })),
+        ),
+      })),
+    );
+
+    return {
+      ...comic,
+      comicPath,
+      comicScans,
+      genres: this.mapGenresFromComic(comic),
+    };
+  }
+
+  async resolveComicRouteSegment(segment: string) {
+    const exactComic = await this.db.query.comics.findFirst({
+      where: eq(comics.slug, segment),
+    });
+
+    if (exactComic) {
+      if (exactComic.protectedRouteEnabled) {
+        throw this.routeProtectionService.createUnavailableException();
+      }
+
+      return exactComic;
+    }
+
+    const parsed = this.routeProtectionService.parseComicSegment(segment);
+    if (!parsed.hasCode || !parsed.slug) {
+      throw new NotFoundException('Comic not found');
+    }
+
+    const protectedComic = await this.db.query.comics.findFirst({
+      where: eq(comics.slug, parsed.slug),
+    });
+
+    if (!protectedComic) {
+      throw new NotFoundException('Comic not found');
+    }
+
+    if (!protectedComic.protectedRouteEnabled) {
+      throw new NotFoundException('Comic not found');
+    }
+
+    const currentCode = await this.routeProtectionService.getComicCode(protectedComic.id);
+    if (parsed.code !== currentCode) {
+      throw this.routeProtectionService.createUnavailableException();
+    }
+
+    return protectedComic;
+  }
+
+  async findPublicByRouteSegment(segment: string) {
+    const comic = await this.resolveComicRouteSegment(segment);
+    return this.findById(comic.id);
   }
 
   async findAll(filters: ComicFilters = {}) {
@@ -273,23 +364,27 @@ export class ComicService {
       }
     }
 
-    return {
-      data: orderedResults.map(comic => {
+    const data = await Promise.all(
+      orderedComicIds.length === 0 ? [] : orderedResults.map(async comic => {
         const mainScan = comic.comicScans?.find(cs => chaptersByScan.has(cs.id)) || comic.comicScans?.[0];
         const recentChapters = mainScan ? (chaptersByScan.get(mainScan.id) || []) : [];
 
         return {
-          ...comic,
+          ...(await this.buildComicSummary(comic)),
           genres: comic.comicGenres.map((cg: any) => cg.genre),
           scan_group_name: mainScan?.scanGroup?.name || 'Unknown',
-          recent_chapters: recentChapters.map((ch: any) => ({
+          recent_chapters: await this.buildRecentChapterSummaries(comic, recentChapters.map((ch: any) => ({
             id: ch.id,
             chapter_number: String(ch.chapter_number),
             title: ch.title || `Capítulo ${ch.chapter_number}`,
             created_at: ch.created_at,
-          })),
+          }))),
         };
       }),
+    );
+
+    return {
+      data,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
       genres: allGenres.map(g => g.name),
     };
@@ -322,10 +417,7 @@ export class ComicService {
           throw new NotFoundException('Comic not found');
         }
 
-        return {
-          ...comic,
-          genres: comic.comicGenres.map((cg: any) => cg.genre),
-        };
+        return this.buildComicDetailPayload(comic);
       },
       CACHE_TTL.LONG, // 2 hours
     );
@@ -358,10 +450,7 @@ export class ComicService {
           throw new NotFoundException('Comic not found');
         }
 
-        return {
-          ...comic,
-          genres: comic.comicGenres.map((cg: any) => cg.genre),
-        };
+        return this.buildComicDetailPayload(comic);
       },
       CACHE_TTL.LONG, // 2 hours
     );
@@ -373,10 +462,10 @@ export class ComicService {
 
     return this.cacheService.wrap(
       cacheKey,
-      () => {
+      async () => {
         const conditions = [eq(comics.isHentai, false)];
         if (isNsfw !== undefined) conditions.push(eq(comics.isNsfw, isNsfw));
-        return this.db.query.comics.findMany({
+        const results = await this.db.query.comics.findMany({
           where: and(...conditions),
           orderBy: [desc(comics.views)],
           limit,
@@ -386,6 +475,12 @@ export class ComicService {
             },
           },
         });
+        return Promise.all(
+          results.map(async (comic) => ({
+            ...(await this.buildComicSummary(comic)),
+            genres: comic.comicGenres?.map((cg: any) => cg.genre) || [],
+          })),
+        );
       },
       CACHE_TTL.LONG, // 2 hours
     );
@@ -404,6 +499,7 @@ export class ComicService {
         title: true,
         slug: true,
         coverImage: true,
+        protectedRouteEnabled: true,
         isNsfw: true,
       },
     });
@@ -421,14 +517,15 @@ export class ComicService {
 
     if (topDaily.length === 0) {
       const fallback = await this.getPopularTodayFallback(limit, isNsfw);
-      return fallback.map((comic) => ({
-        id: comic.id,
-        title: comic.title,
-        slug: comic.slug,
-        coverImage: comic.coverImage,
-        viewsToday: 0,
-        isNsfw: comic.isNsfw,
-      }));
+      return Promise.all(
+        fallback.map(async (comic) => ({
+          ...(await this.buildComicSummary(comic)),
+          title: comic.title,
+          coverImage: comic.coverImage,
+          viewsToday: 0,
+          isNsfw: comic.isNsfw,
+        })),
+      );
     }
 
     const topIds = topDaily.map((daily) => daily.comicId);
@@ -446,6 +543,7 @@ export class ComicService {
         title: true,
         slug: true,
         coverImage: true,
+        protectedRouteEnabled: true,
         isNsfw: true,
       },
     });
@@ -458,36 +556,38 @@ export class ComicService {
 
     if (sortedResults.length === 0) {
       const fallback = await this.getPopularTodayFallback(limit, isNsfw);
-      return fallback.map((comic) => ({
-        id: comic.id,
-        title: comic.title,
-        slug: comic.slug,
-        coverImage: comic.coverImage,
-        viewsToday: 0,
-        isNsfw: comic.isNsfw,
-      }));
+      return Promise.all(
+        fallback.map(async (comic) => ({
+          ...(await this.buildComicSummary(comic)),
+          title: comic.title,
+          coverImage: comic.coverImage,
+          viewsToday: 0,
+          isNsfw: comic.isNsfw,
+        })),
+      );
     }
 
-    return sortedResults.map((comic) => ({
-      id: comic.id,
-      title: comic.title,
-      slug: comic.slug,
-      coverImage: comic.coverImage,
-      viewsToday: dailyViewsMap.get(comic.id) ?? 0,
-      isNsfw: comic.isNsfw,
-    }));
+    return Promise.all(
+      sortedResults.map(async (comic) => ({
+        ...(await this.buildComicSummary(comic)),
+        title: comic.title,
+        coverImage: comic.coverImage,
+        viewsToday: dailyViewsMap.get(comic.id) ?? 0,
+        isNsfw: comic.isNsfw,
+      })),
+    );
   }
 
   async getRecent(limit = 10, isNsfw?: boolean) {
     const nsfwKey = isNsfw === undefined ? 'all' : isNsfw ? 'nsfw' : 'safe';
-    const cacheKey = `${CACHE_KEYS.COMIC_RECENT}:${limit}:${nsfwKey}`;
+    const cacheKey = `${CACHE_KEYS.COMIC_RECENT}:v2:${limit}:${nsfwKey}`;
 
     return this.cacheService.wrap(
       cacheKey,
-      () => {
+      async () => {
         const conditions = [eq(comics.isHentai, false)];
         if (isNsfw !== undefined) conditions.push(eq(comics.isNsfw, isNsfw));
-        return this.db.query.comics.findMany({
+        const results = await this.db.query.comics.findMany({
           where: and(...conditions),
           orderBy: [desc(comics.updatedAt)],
           limit,
@@ -497,6 +597,12 @@ export class ComicService {
             },
           },
         });
+        return Promise.all(
+          results.map(async (comic) => ({
+            ...(await this.buildComicSummary(comic)),
+            genres: comic.comicGenres?.map((cg: any) => cg.genre) || [],
+          })),
+        );
       },
       CACHE_TTL.MEDIUM, // 30 minutes
     );
@@ -504,7 +610,7 @@ export class ComicService {
 
   async getRecentWithChapters(limit = 20, isNsfw?: boolean) {
     const nsfwKey = isNsfw === undefined ? 'all' : isNsfw ? 'nsfw' : 'safe';
-    const cacheKey = `${CACHE_KEYS.COMIC_RECENT_CHAPTERS}:${limit}:${nsfwKey}`;
+    const cacheKey = `${CACHE_KEYS.COMIC_RECENT_CHAPTERS}:v2:${limit}:${nsfwKey}`;
 
     return this.cacheService.wrap(
       cacheKey,
@@ -570,17 +676,20 @@ export class ComicService {
     }
 
     // Step 4: Build results preserving order
-    return sortedScans
-      .map(({ comic_scan_id, last_chapter_at }) => {
+    const recentResults = await Promise.all(
+      sortedScans.map(async ({ comic_scan_id, last_chapter_at }) => {
         const scan = scanDataMap.get(comic_scan_id);
         if (!scan?.comic) return null;
 
         const chaps = chaptersByScan.get(comic_scan_id) || [];
+        const comicPath = await this.routeProtectionService.getComicPath(scan.comic);
 
         return {
           comic_id: scan.comic.id,
+          comic_slug: scan.comic.slug,
           comic_title: scan.comic.title,
           comic_cover: scan.comic.coverImage,
+          comic_path: comicPath,
           comic_status: scan.comic.status,
           comic_type: scan.comic.type,
           is_content_nsfw: scan.comic.isNsfw,
@@ -593,15 +702,17 @@ export class ComicService {
           scan_group_id: scan.scanGroup?.id || 0,
           scan_group_name: scan.scanGroup?.name || 'Unknown',
           last_chapter_at: last_chapter_at,
-          recent_chapters: chaps.map(ch => ({
+          recent_chapters: await this.buildRecentChapterSummaries(scan.comic, chaps.map(ch => ({
             id: ch.id,
             chapter_number: String(ch.chapter_number),
             title: ch.title || `Capítulo ${ch.chapter_number}`,
             created_at: ch.created_at,
-          })),
+          }))),
         };
-      })
-      .filter(Boolean);
+      }),
+    );
+
+    return recentResults.filter(Boolean);
   }
 
   async getAllGenres(includeAdult = false) {
@@ -681,7 +792,16 @@ export class ComicService {
       throw new NotFoundException('Comic scan not found');
     }
 
-    return comicScan;
+    return {
+      ...comicScan,
+      comicPath: await this.routeProtectionService.getComicPath(comicScan.comic),
+      chapters: await Promise.all(
+        (comicScan.chapters || []).map(async (chapter) => ({
+          ...chapter,
+          chapterPath: await this.routeProtectionService.getChapterPath(comicScan.comic, chapter),
+        })),
+      ),
+    };
   }
 
   async getRecommendations(comicId: number, limit = 5, isNsfw?: boolean) {
@@ -792,17 +912,18 @@ export class ComicService {
       recommendedComics = [...recommendedComics, ...popularComics];
     }
 
-    return recommendedComics.map(comic => ({
-      id: comic.id,
-      title: comic.title,
-      slug: comic.slug,
-      coverImage: comic.coverImage,
-      type: comic.type,
-      status: comic.status,
-      views: comic.views,
-      isNsfw: comic.isNsfw,
-      genres: comic.comicGenres?.map((cg: any) => cg.genre) || [],
-    }));
+    return Promise.all(
+      recommendedComics.map(async (comic) => ({
+        ...(await this.buildComicSummary(comic)),
+        title: comic.title,
+        coverImage: comic.coverImage,
+        type: comic.type,
+        status: comic.status,
+        views: comic.views,
+        isNsfw: comic.isNsfw,
+        genres: comic.comicGenres?.map((cg: any) => cg.genre) || [],
+      })),
+    );
   }
 
   async getPopular(limit = 10, isNsfw?: boolean) {
@@ -826,17 +947,18 @@ export class ComicService {
           },
         });
 
-        return popularComics.map(comic => ({
-          id: comic.id,
-          title: comic.title,
-          slug: comic.slug,
-          coverImage: comic.coverImage,
-          type: comic.type,
-          status: comic.status,
-          views: comic.views,
-          isNsfw: comic.isNsfw,
-          genres: comic.comicGenres?.map((cg: any) => cg.genre) || [],
-        }));
+        return Promise.all(
+          popularComics.map(async (comic) => ({
+            ...(await this.buildComicSummary(comic)),
+            title: comic.title,
+            coverImage: comic.coverImage,
+            type: comic.type,
+            status: comic.status,
+            views: comic.views,
+            isNsfw: comic.isNsfw,
+            genres: comic.comicGenres?.map((cg: any) => cg.genre) || [],
+          })),
+        );
       },
       CACHE_TTL.LONG, // 2 hours
     );
@@ -875,12 +997,14 @@ export class ComicService {
               updatedAt: comics.updatedAt,
             })
             .from(comics)
+            .where(eq(comics.protectedRouteEnabled, false))
             .orderBy(desc(comics.updatedAt))
             .limit(limit)
             .offset(offset),
           this.db
             .select({ count: sql<number>`count(*)` })
-            .from(comics),
+            .from(comics)
+            .where(eq(comics.protectedRouteEnabled, false)),
         ]);
 
         const total = Number(countResult[0]?.count || 0);
@@ -904,6 +1028,7 @@ export class ComicService {
     chapters: Array<{
       id: number;
       comicId: number;
+      comicSlug: string;
       chapterNumber: number;
       updatedAt: Date | null;
     }>;
@@ -924,17 +1049,23 @@ export class ComicService {
             .select({
               id: chapters.id,
               comicId: comicScans.comicId,
+              comicSlug: comics.slug,
               chapterNumber: chapters.chapterNumber,
               updatedAt: chapters.updatedAt,
             })
             .from(chapters)
             .innerJoin(comicScans, eq(chapters.comicScanId, comicScans.id))
+            .innerJoin(comics, eq(comicScans.comicId, comics.id))
+            .where(eq(comics.protectedRouteEnabled, false))
             .orderBy(desc(chapters.updatedAt))
             .limit(limit)
             .offset(offset),
           this.db
             .select({ count: sql<number>`count(*)` })
-            .from(chapters),
+            .from(chapters)
+            .innerJoin(comicScans, eq(chapters.comicScanId, comicScans.id))
+            .innerJoin(comics, eq(comicScans.comicId, comics.id))
+            .where(eq(comics.protectedRouteEnabled, false)),
         ]);
 
         const total = Number(countResult[0]?.count || 0);
