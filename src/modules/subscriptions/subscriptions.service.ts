@@ -13,6 +13,10 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
 import { createHmac, timingSafeEqual } from 'crypto';
 import {
+  getAllowedPersonalEmailDomainsLabel,
+  isAllowedPersonalEmailDomain,
+} from '@/lib/email-policy';
+import {
   buildSubscriptionSummary,
   type PremiumCycle,
   type ProfileRecord,
@@ -201,6 +205,18 @@ export class SubscriptionsService {
 
     if (!authUser) {
       throw new NotFoundException('User not found');
+    }
+
+    if (!authUser.emailVerified) {
+      throw new BadRequestException(
+        'Debes verificar tu correo antes de comprar Premium con Stripe',
+      );
+    }
+
+    if (!isAllowedPersonalEmailDomain(authUser.email)) {
+      throw new BadRequestException(
+        `Solo aceptamos correos personales de: ${getAllowedPersonalEmailDomainsLabel()}.`,
+      );
     }
 
     const price = await this.resolveStripeCheckoutPrice(cycle);

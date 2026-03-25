@@ -2,9 +2,14 @@ import 'dotenv/config';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { bearer } from 'better-auth/plugins/bearer';
+import { APIError } from 'better-call';
 import { Pool } from 'pg';
 import * as schema from '@/database/schema';
 import { drizzle } from 'drizzle-orm/node-postgres';
+import {
+  getAllowedPersonalEmailDomainsLabel,
+  isAllowedPersonalEmailDomain,
+} from '@/lib/email-policy';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -32,6 +37,28 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     autoSignIn: true,
+  },
+  databaseHooks: {
+    user: {
+      create: {
+        async before(nextUser) {
+          const normalizedEmail = nextUser.email.trim().toLowerCase();
+
+          if (!isAllowedPersonalEmailDomain(normalizedEmail)) {
+            throw new APIError('BAD_REQUEST', {
+              message: `Solo aceptamos correos personales de: ${getAllowedPersonalEmailDomainsLabel()}.`,
+            });
+          }
+
+          return {
+            data: {
+              ...nextUser,
+              email: normalizedEmail,
+            },
+          };
+        },
+      },
+    },
   },
   socialProviders: {
     discord: {
