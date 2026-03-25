@@ -268,6 +268,7 @@ export class EngagementController {
 
   // ---- Click handler (ONLY real clicks, not scroll) ----
   function handleClick(e) {
+    if (e.target.id === 'close-vip-ads') return;
     if (isExcluded()) return;
     if (!ready) return;
     if (!active) return;
