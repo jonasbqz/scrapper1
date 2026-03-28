@@ -207,8 +207,16 @@ export class SubscriptionsService {
     page?: number;
     limit?: number;
   }): Promise<PremiumRefundRequestListResponse> {
-    const page = Math.max(1, input.page ?? 1);
-    const limit = Math.min(100, Math.max(1, input.limit ?? 20));
+    const requestedPage =
+      typeof input.page === 'number' && Number.isFinite(input.page)
+        ? input.page
+        : 1;
+    const requestedLimit =
+      typeof input.limit === 'number' && Number.isFinite(input.limit)
+        ? input.limit
+        : 20;
+    const page = Math.max(1, requestedPage);
+    const limit = Math.min(100, Math.max(1, requestedLimit));
     const offset = (page - 1) * limit;
     const whereClause = this.buildRefundRequestWhereClause(input);
 
