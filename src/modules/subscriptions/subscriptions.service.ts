@@ -201,6 +201,29 @@ export class SubscriptionsService {
     return this.getRefundRequestById(inserted[0].id);
   }
 
+  async cancelRefundRequest(profileId: string): Promise<{ success: true }> {
+    const profile = await this.getProfileById(profileId);
+
+    if (!profile.stripeSubscriptionId) {
+      throw new BadRequestException('There is no active refund request to cancel');
+    }
+
+    const openRequest = await this.findOpenRefundRequest(
+      profile.id,
+      profile.stripeSubscriptionId,
+    );
+
+    if (!openRequest) {
+      throw new NotFoundException('Refund request not found');
+    }
+
+    await this.db
+      .delete(premiumRefundRequests)
+      .where(eq(premiumRefundRequests.id, openRequest.id));
+
+    return { success: true };
+  }
+
   async listRefundRequests(input: {
     status?: string;
     search?: string;

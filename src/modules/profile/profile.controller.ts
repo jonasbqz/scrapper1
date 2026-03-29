@@ -136,6 +136,14 @@ export class ProfileController {
     return this.sanitizeRefundRequestForProfile(request);
   }
 
+  @Delete('me/subscription/refund-request')
+  @UseGuards(AuthGuard, ProfileGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Cancel current user refund request while it is still open' })
+  async cancelMyRefundRequest(@CurrentUser() user: UserSession) {
+    return this.subscriptionsService.cancelRefundRequest(user.profileId!);
+  }
+
   @Post('me/subscription/checkout')
   @UseGuards(AuthGuard, ProfileGuard)
   @ApiBearerAuth()
