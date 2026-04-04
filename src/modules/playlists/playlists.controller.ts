@@ -18,11 +18,42 @@ import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { PlaylistsService } from './playlists.service';
 import { CreatePlaylistDto, UpdatePlaylistDto, ReorderPlaylistDto } from './playlists.dto';
+import { RouteProtectionService } from '@/modules/route-protection/route-protection.service';
 
 @ApiTags('Playlists')
 @Controller('playlists')
 export class PlaylistsController {
-  constructor(private playlistsService: PlaylistsService) {}
+  constructor(
+    private playlistsService: PlaylistsService,
+    private routeProtectionService: RouteProtectionService,
+  ) {}
+
+  private async enrichPlaylist(playlist: any): Promise<any> {
+    if (!playlist?.items?.length) {
+      return playlist;
+    }
+
+    const items = await Promise.all(
+      playlist.items.map(async (item: any) => {
+        if (!item?.comic) {
+          return item;
+        }
+
+        return {
+          ...item,
+          comic: {
+            ...item.comic,
+            comicPath: await this.routeProtectionService.getComicPath(item.comic),
+          },
+        };
+      }),
+    );
+
+    return {
+      ...playlist,
+      items,
+    };
+  }
 
   @Post()
   @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
@@ -40,7 +71,8 @@ export class PlaylistsController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all playlists of the current user' })
   async findByUser(@CurrentUser() user: UserSession) {
-    return this.playlistsService.findByUser(user.profileId!);
+    const playlists = await this.playlistsService.findByUser(user.profileId!);
+    return Promise.all(playlists.map((playlist) => this.enrichPlaylist(playlist)));
   }
 
   @Get('public')
@@ -51,10 +83,11 @@ export class PlaylistsController {
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
-    return this.playlistsService.findPublic(
+    const playlists = await this.playlistsService.findPublic(
       limit ? parseInt(limit, 10) : 20,
       offset ? parseInt(offset, 10) : 0,
     );
+    return Promise.all(playlists.map((playlist) => this.enrichPlaylist(playlist)));
   }
 
   @Get('sitemap/list')
@@ -69,7 +102,8 @@ export class PlaylistsController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user?: UserSession,
   ) {
-    return this.playlistsService.findByIdForUser(id, user?.profileId ?? null);
+    const playlist = await this.playlistsService.findByIdForUser(id, user?.profileId ?? null);
+    return this.enrichPlaylist(playlist);
   }
 
   @Patch(':id')
@@ -81,7 +115,8 @@ export class PlaylistsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdatePlaylistDto,
   ) {
-    return this.playlistsService.update(user.profileId!, id, dto);
+    const playlist = await this.playlistsService.update(user.profileId!, id, dto);
+    return this.enrichPlaylist(playlist);
   }
 
   @Delete(':id')
@@ -130,6 +165,7 @@ export class PlaylistsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReorderPlaylistDto,
   ) {
-    return this.playlistsService.reorderComics(user.profileId!, id, dto);
+    const playlist = await this.playlistsService.reorderComics(user.profileId!, id, dto);
+    return this.enrichPlaylist(playlist);
   }
 }

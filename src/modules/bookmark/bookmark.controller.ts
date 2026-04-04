@@ -17,13 +17,31 @@ import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { BookmarkService } from './bookmark.service';
 import { CreateBookmarkDto, UpdateBookmarkDto } from './bookmark.dto';
+import { RouteProtectionService } from '@/modules/route-protection/route-protection.service';
 
 @ApiTags('Bookmarks')
 @Controller('bookmarks')
 @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
 @ApiBearerAuth()
 export class BookmarkController {
-  constructor(private bookmarkService: BookmarkService) {}
+  constructor(
+    private bookmarkService: BookmarkService,
+    private routeProtectionService: RouteProtectionService,
+  ) {}
+
+  private async enrichBookmark(bookmark: any): Promise<any> {
+    if (!bookmark?.comic) {
+      return bookmark;
+    }
+
+    return {
+      ...bookmark,
+      comic: {
+        ...bookmark.comic,
+        comicPath: await this.routeProtectionService.getComicPath(bookmark.comic),
+      },
+    };
+  }
 
   @Post()
   @ApiOperation({ summary: 'Create or update bookmark' })
@@ -31,19 +49,22 @@ export class BookmarkController {
     @CurrentUser() user: UserSession,
     @Body() dto: CreateBookmarkDto,
   ) {
-    return this.bookmarkService.upsert(user.profileId!, dto);
+    const bookmark = await this.bookmarkService.upsert(user.profileId!, dto);
+    return this.enrichBookmark(bookmark);
   }
 
   @Get()
   @ApiOperation({ summary: 'Get all bookmarks' })
   async findAll(@CurrentUser() user: UserSession) {
-    return this.bookmarkService.findAll(user.profileId!);
+    const bookmarks = await this.bookmarkService.findAll(user.profileId!);
+    return Promise.all(bookmarks.map((bookmark) => this.enrichBookmark(bookmark)));
   }
 
   @Get('favorites')
   @ApiOperation({ summary: 'Get favorite bookmarks' })
   async findFavorites(@CurrentUser() user: UserSession) {
-    return this.bookmarkService.findFavorites(user.profileId!);
+    const bookmarks = await this.bookmarkService.findFavorites(user.profileId!);
+    return Promise.all(bookmarks.map((bookmark) => this.enrichBookmark(bookmark)));
   }
 
   @Get('status/:status')
@@ -52,7 +73,8 @@ export class BookmarkController {
     @CurrentUser() user: UserSession,
     @Param('status') status: string,
   ) {
-    return this.bookmarkService.findByStatus(user.profileId!, status);
+    const bookmarks = await this.bookmarkService.findByStatus(user.profileId!, status);
+    return Promise.all(bookmarks.map((bookmark) => this.enrichBookmark(bookmark)));
   }
 
   @Get(':comicId')
@@ -65,7 +87,7 @@ export class BookmarkController {
     if (!bookmark) {
       throw new NotFoundException('Bookmark not found');
     }
-    return bookmark;
+    return this.enrichBookmark(bookmark);
   }
 
   @Put(':comicId')
@@ -75,7 +97,8 @@ export class BookmarkController {
     @Param('comicId', ParseIntPipe) comicId: number,
     @Body() dto: UpdateBookmarkDto,
   ) {
-    return this.bookmarkService.update(user.profileId!, comicId, dto);
+    const bookmark = await this.bookmarkService.update(user.profileId!, comicId, dto);
+    return this.enrichBookmark(bookmark);
   }
 
   @Delete(':comicId')

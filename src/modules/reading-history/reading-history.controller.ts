@@ -16,13 +16,44 @@ import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { ReadingHistoryService } from './reading-history.service';
 import { RecordReadingDto } from './reading-history.dto';
+import { RouteProtectionService } from '@/modules/route-protection/route-protection.service';
 
 @ApiTags('Reading History')
 @Controller('reading-history')
 @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
 @ApiBearerAuth()
 export class ReadingHistoryController {
-  constructor(private readingHistoryService: ReadingHistoryService) {}
+  constructor(
+    private readingHistoryService: ReadingHistoryService,
+    private routeProtectionService: RouteProtectionService,
+  ) {}
+
+  private async enrichEntry(entry: any): Promise<any> {
+    if (!entry?.comic) {
+      return entry;
+    }
+
+    const comicPath = await this.routeProtectionService.getComicPath(entry.comic);
+    const chapterPath = entry.chapter
+      ? await this.routeProtectionService.getChapterPath(entry.comic, entry.chapter, {
+          comicPath,
+        })
+      : undefined;
+
+    return {
+      ...entry,
+      comic: {
+        ...entry.comic,
+        comicPath,
+      },
+      chapter: entry.chapter
+        ? {
+            ...entry.chapter,
+            chapterPath,
+          }
+        : entry.chapter,
+    };
+  }
 
   @Post()
   @ApiOperation({ summary: 'Record reading progress' })
@@ -30,7 +61,8 @@ export class ReadingHistoryController {
     @CurrentUser() user: UserSession,
     @Body() dto: RecordReadingDto,
   ) {
-    return this.readingHistoryService.record(user.profileId!, dto);
+    const entry = await this.readingHistoryService.record(user.profileId!, dto);
+    return this.enrichEntry(entry);
   }
 
   @Get()
@@ -40,10 +72,11 @@ export class ReadingHistoryController {
     @CurrentUser() user: UserSession,
     @Query('limit') limit?: string,
   ) {
-    return this.readingHistoryService.findAll(
+    const entries = await this.readingHistoryService.findAll(
       user.profileId!,
       limit ? parseInt(limit, 10) : 50,
     );
+    return Promise.all(entries.map((entry) => this.enrichEntry(entry)));
   }
 
   @Get('recent')
@@ -53,10 +86,11 @@ export class ReadingHistoryController {
     @CurrentUser() user: UserSession,
     @Query('limit') limit?: string,
   ) {
-    return this.readingHistoryService.findRecent(
+    const entries = await this.readingHistoryService.findRecent(
       user.profileId!,
       limit ? parseInt(limit, 10) : 10,
     );
+    return Promise.all(entries.map((entry) => this.enrichEntry(entry)));
   }
 
   @Get('comic/:comicId')
@@ -65,7 +99,8 @@ export class ReadingHistoryController {
     @CurrentUser() user: UserSession,
     @Param('comicId', ParseIntPipe) comicId: number,
   ) {
-    return this.readingHistoryService.findByComic(user.profileId!, comicId);
+    const entries = await this.readingHistoryService.findByComic(user.profileId!, comicId);
+    return Promise.all(entries.map((entry) => this.enrichEntry(entry)));
   }
 
   @Get('comic/:comicId/last')
@@ -74,7 +109,8 @@ export class ReadingHistoryController {
     @CurrentUser() user: UserSession,
     @Param('comicId', ParseIntPipe) comicId: number,
   ) {
-    return this.readingHistoryService.findLastRead(user.profileId!, comicId);
+    const entry = await this.readingHistoryService.findLastRead(user.profileId!, comicId);
+    return this.enrichEntry(entry);
   }
 
   @Delete(':id')

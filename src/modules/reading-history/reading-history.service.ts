@@ -78,6 +78,7 @@ export class ReadingHistoryService {
       ),
       orderBy: [desc(readingHistory.readAt)],
       with: {
+        comic: true,
         chapter: true,
       },
     });
@@ -91,6 +92,7 @@ export class ReadingHistoryService {
       ),
       orderBy: [desc(readingHistory.readAt)],
       with: {
+        comic: true,
         chapter: true,
       },
     });
