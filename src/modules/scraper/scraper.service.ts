@@ -34,15 +34,15 @@ export class ScraperService implements OnModuleInit {
   async onModuleInit() {
     this.logger.log("Server started. Triggering initial scrape tasks...");
 
-    // this.scrapeIkigai(1, 10).catch((err) =>
-    //   this.logger.error(`Initial Ikigai scrape failed: ${err}`),
-    // );
-    // this.scrapeOlympus(1, 2).catch((err) =>
-    //   this.logger.error(`Initial Olympus scrape failed: ${err}`),
-    // );
-    // this.scrapeNobledicion(1, 1, 6).catch((err) =>
-    //   this.logger.error(`Initial Nobledicion scrape failed: ${err}`),
-    // );
+    this.scrapeIkigai(1, 10).catch((err) =>
+      this.logger.error(`Initial Ikigai scrape failed: ${err}`),
+    );
+    this.scrapeOlympus(1, 2).catch((err) =>
+      this.logger.error(`Initial Olympus scrape failed: ${err}`),
+    );
+    this.scrapeNobledicion(1, 1, 6).catch((err) =>
+      this.logger.error(`Initial Nobledicion scrape failed: ${err}`),
+    );
     // this.scrapePeerless(1,2).catch(err => this.logger.error(`Initial Peerless scrape failed: ${err}`));
     // Initial Nobledicion scrape config for pages 0-3 with 18 items per page:
   }
@@ -89,7 +89,7 @@ export class ScraperService implements OnModuleInit {
   /**
    * Scheduled scraping - Ikigai every hour
    */
-  // @Cron(CronExpression.EVERY_HOUR)
+  @Cron(CronExpression.EVERY_HOUR)
   async scheduledIkigai() {
     if (!this.queue.isRunning("ikigai")) {
       this.logger.log("Starting scheduled Ikigai scrape");
@@ -100,7 +100,7 @@ export class ScraperService implements OnModuleInit {
   /**
    * Scheduled scraping - Olympus every 2 hours
    */
-  // @Cron(CronExpression.EVERY_2_HOURS)
+  @Cron(CronExpression.EVERY_2_HOURS)
   async scheduledOlympus() {
     if (!this.queue.isRunning("olympus")) {
       this.logger.log("Starting scheduled Olympus scrape");
@@ -122,7 +122,7 @@ export class ScraperService implements OnModuleInit {
   /**
    * Scheduled scraping - Nobledicion every 5 hours
    */
-  // @Cron("0 */5 * * *")
+  @Cron("0 */5 * * *")
   async scheduledNobledicion() {
     if (!this.queue.isRunning("nobledicion")) {
       this.logger.log("Starting scheduled Nobledicion scrape");
