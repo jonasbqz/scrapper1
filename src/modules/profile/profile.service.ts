@@ -1,7 +1,14 @@
-import { Injectable, Inject, ConflictException, NotFoundException } from '@nestjs/common';
-import { eq, count, countDistinct } from 'drizzle-orm';
+import {
+  Injectable,
+  Inject,
+  ConflictException,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
+import { and, eq, count, countDistinct } from 'drizzle-orm';
 import { DATABASE_CONNECTION } from '@/database/database.module';
 import {
+  account as authAccount,
   profiles,
   likes,
   comments,
@@ -14,12 +21,22 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
 import { CreateProfileDto, UpdateProfileDto } from './profile.dto';
 import { buildSubscriptionSummary } from '@/modules/subscriptions/subscriptions.types';
+import { StorageService } from '@/modules/media/storage.service';
+import { isEmailVerificationRequired } from '@/lib/email-verification-policy';
+
+const PROFILE_AVATAR_ALLOWED_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+]);
+const PROFILE_AVATAR_MAX_BYTES = 5 * 1024 * 1024;
 
 @Injectable()
 export class ProfileService {
   constructor(
     @Inject(DATABASE_CONNECTION)
     private db: NodePgDatabase<typeof schema>,
+    private readonly storageService: StorageService,
   ) {}
 
   async create(userId: string, dto: CreateProfileDto) {
@@ -149,6 +166,35 @@ export class ProfileService {
     };
   }
 
+  async toPrivateProfileResponseForUser(profile: typeof profiles.$inferSelect) {
+    const [authRecord, credentialAccount] = await Promise.all([
+      this.db.query.user.findFirst({
+        where: eq(authUser.id, profile.userId),
+      }),
+      this.db.query.account.findFirst({
+        where: and(
+          eq(authAccount.userId, profile.userId),
+          eq(authAccount.providerId, 'credential'),
+        ),
+        columns: {
+          providerId: true,
+        },
+      }),
+    ]);
+
+    const requiresEmailVerification = isEmailVerificationRequired({
+      emailVerified: authRecord?.emailVerified === true,
+      hasCredentialAccount: credentialAccount?.providerId === 'credential',
+    });
+
+    return {
+      ...this.toPrivateProfileResponse(profile),
+      emailVerified: authRecord?.emailVerified === true,
+      requiresEmailVerification,
+      canUseAccountFeatures: !requiresEmailVerification,
+    };
+  }
+
   async update(profileId: string, dto: UpdateProfileDto) {
     const profile = await this.findById(profileId);
     if (!profile) {
@@ -178,6 +224,115 @@ export class ProfileService {
 
   async delete(profileId: string) {
     await this.db.delete(profiles).where(eq(profiles.id, profileId));
+  }
+
+  private validateAvatarUpload(
+    body: Buffer,
+    fileName: string | null | undefined,
+    mimeType: string | null | undefined,
+  ) {
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      throw new BadRequestException('Avatar image body is required');
+    }
+
+    if (body.length > PROFILE_AVATAR_MAX_BYTES) {
+      throw new BadRequestException('Avatar image must be 5MB or smaller');
+    }
+
+    if (!fileName?.trim()) {
+      throw new BadRequestException('Avatar file name is required');
+    }
+
+    const normalizedMimeType = mimeType?.split(';')[0]?.trim().toLowerCase() || null;
+    if (!normalizedMimeType || !PROFILE_AVATAR_ALLOWED_MIME_TYPES.has(normalizedMimeType)) {
+      throw new BadRequestException('Avatar image must be JPG, PNG, or WEBP');
+    }
+
+    return {
+      fileName: fileName.trim(),
+      mimeType: normalizedMimeType,
+    };
+  }
+
+  async uploadAvatar(
+    profileId: string,
+    file: {
+      body: Buffer;
+      fileName: string | null | undefined;
+      mimeType: string | null | undefined;
+    },
+  ) {
+    const profile = await this.findById(profileId);
+    if (!profile) {
+      throw new NotFoundException('Profile not found');
+    }
+
+    const normalizedFile = this.validateAvatarUpload(
+      file.body,
+      file.fileName,
+      file.mimeType,
+    );
+    const nextStorageKey = this.storageService.createScopedStorageKey(
+      'profiles/avatars',
+      profileId,
+      normalizedFile.fileName,
+    );
+
+    await this.storageService.uploadObject(
+      nextStorageKey,
+      file.body,
+      normalizedFile.mimeType,
+    );
+
+    const previousStorageKey = this.storageService.extractStorageKeyFromUrl(
+      profile.avatarUrl,
+    );
+    const nextAvatarUrl = this.storageService.buildPublicUrl(nextStorageKey);
+
+    const [updatedProfile] = await this.db
+      .update(profiles)
+      .set({
+        avatarUrl: nextAvatarUrl,
+        updatedAt: new Date(),
+      })
+      .where(eq(profiles.id, profileId))
+      .returning();
+
+    if (previousStorageKey && previousStorageKey !== nextStorageKey) {
+      await this.storageService.deleteObject(previousStorageKey).catch((error) => {
+        console.error('[ProfileService] Failed to delete previous avatar:', error);
+      });
+    }
+
+    return updatedProfile;
+  }
+
+  async deleteAvatar(profileId: string) {
+    const profile = await this.findById(profileId);
+    if (!profile) {
+      throw new NotFoundException('Profile not found');
+    }
+
+    const previousStorageKey = this.storageService.extractStorageKeyFromUrl(
+      profile.avatarUrl,
+    );
+
+    const [updatedProfile] = await this.db
+      .update(profiles)
+      .set({
+        avatarUrl: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(profiles.id, profileId))
+      .returning();
+
+    if (previousStorageKey) {
+      await this.storageService.deleteObject(previousStorageKey).catch((error) => {
+        console.error('[ProfileService] Failed to delete avatar from storage:', error);
+      });
+    }
+
+    return updatedProfile;
   }
 
   async getStats(profileId: string) {

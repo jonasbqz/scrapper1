@@ -143,6 +143,25 @@ export class ComicController {
     return this.comicService.getRecommendations(id, limit ? parseInt(limit, 10) : 10, isNsfw);
   }
 
+  @Get('lookup/route/:segment')
+  @ApiOperation({ summary: 'Resolve comic path without incrementing views' })
+  async lookupByRouteSegment(@Param('segment') segment: string) {
+    return this.comicService.findLookupByRouteSegment(
+      decodeURIComponent(segment),
+    );
+  }
+
+  @Get('lookup/id/:id')
+  @ApiOperation({ summary: 'Resolve comic path by id without incrementing views' })
+  async lookupById(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() request: FastifyRequest,
+  ) {
+    const comic = await this.comicService.findLookupById(id);
+    await this.routeProtectionService.assertLegacyAccess(comic, request.headers);
+    return comic;
+  }
+
   @Get('route/:segment')
   @ApiOperation({ summary: 'Get comic by protected route segment' })
   async findByRouteSegment(@Param('segment') segment: string) {

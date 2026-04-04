@@ -17,6 +17,7 @@ import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger'
 import type { FastifyRequest } from 'fastify';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { ProfileGuard } from '@/modules/auth/profile.guard';
+import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { resolveOptionalProfileId } from '@/modules/auth/session-resolver';
 import { CommentsService } from './comments.service';
@@ -40,7 +41,7 @@ export class CommentsController {
   ) {}
 
   @Post()
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create a new comment' })
   async create(
@@ -102,7 +103,7 @@ export class CommentsController {
   }
 
   @Get('user')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get comments by current user' })
   @ApiQuery({ name: 'limit', required: false, type: Number })
@@ -142,7 +143,7 @@ export class CommentsController {
   }
 
   @Post(':id/vote')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Vote up or down on a comment' })
   async vote(
@@ -154,7 +155,7 @@ export class CommentsController {
   }
 
   @Patch(':id')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update own comment' })
   async update(
@@ -166,7 +167,7 @@ export class CommentsController {
   }
 
   @Delete(':id')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete own comment' })
   async delete(

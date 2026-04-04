@@ -119,11 +119,48 @@ export class StorageService {
     }
   }
 
-  createStorageKey(profileId: string, fileName: string) {
+  createScopedStorageKey(scope: string, profileId: string, fileName: string) {
     const sanitizedName = fileName.replace(/[^a-zA-Z0-9._-]/g, '-');
     const now = new Date();
     const datePath = now.toISOString().slice(0, 10);
-    return `comments/${profileId}/${datePath}/${randomUUID()}-${sanitizedName}`;
+    return `${scope}/${profileId}/${datePath}/${randomUUID()}-${sanitizedName}`;
+  }
+
+  createStorageKey(profileId: string, fileName: string) {
+    return this.createScopedStorageKey('comments', profileId, fileName);
+  }
+
+  extractStorageKeyFromUrl(value: string | null | undefined) {
+    if (!value) {
+      return null;
+    }
+
+    try {
+      const { endpoint, bucket, publicBaseUrl } = this.getConfig();
+      const normalizedPublicBaseUrl = publicBaseUrl?.replace(/\/$/, '') || null;
+
+      if (
+        normalizedPublicBaseUrl &&
+        value.startsWith(`${normalizedPublicBaseUrl}/`)
+      ) {
+        return value.slice(normalizedPublicBaseUrl.length + 1);
+      }
+
+      const url = new URL(value);
+      const bucketPrefix = `/${bucket}/`;
+
+      if (
+        url.protocol === endpoint.protocol &&
+        url.host === endpoint.host &&
+        url.pathname.startsWith(bucketPrefix)
+      ) {
+        return decodeURIComponent(url.pathname.slice(bucketPrefix.length));
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   createUploadUrl(storageKey: string, options: PresignedUploadOptions = {}) {

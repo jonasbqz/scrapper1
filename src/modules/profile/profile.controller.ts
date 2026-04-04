@@ -7,13 +7,18 @@ import {
   Body,
   Param,
   Query,
+  Req,
+  Headers,
   UseGuards,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import type { FastifyRequest } from 'fastify';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { ProfileGuard } from '@/modules/auth/profile.guard';
+import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { ProfileService } from './profile.service';
 import { CreateProfileDto, UpdateProfileDto } from './profile.dto';
@@ -47,7 +52,7 @@ export class ProfileController {
     if (!profile) {
       throw new NotFoundException('Profile not found');
     }
-    return this.profileService.toPrivateProfileResponse(profile);
+    return this.profileService.toPrivateProfileResponseForUser(profile);
   }
 
   @Get('me/stats')
@@ -111,7 +116,7 @@ export class ProfileController {
   }
 
   @Get('me/subscription/refund-request')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get current user refund request for Stripe premium' })
   async getMyRefundRequest(@CurrentUser() user: UserSession) {
@@ -122,7 +127,7 @@ export class ProfileController {
   }
 
   @Post('me/subscription/refund-request')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create a refund claim for current Stripe premium subscription' })
   async createMyRefundRequest(
@@ -137,7 +142,7 @@ export class ProfileController {
   }
 
   @Delete('me/subscription/refund-request')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Cancel current user refund request while it is still open' })
   async cancelMyRefundRequest(@CurrentUser() user: UserSession) {
@@ -145,7 +150,7 @@ export class ProfileController {
   }
 
   @Post('me/subscription/checkout')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create a Stripe checkout session for premium' })
   async createMySubscriptionCheckout(
@@ -159,7 +164,7 @@ export class ProfileController {
   }
 
   @Post('me/subscription/confirm')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Confirm and sync a Stripe checkout session for premium' })
   async confirmMySubscriptionCheckout(
@@ -173,7 +178,7 @@ export class ProfileController {
   }
 
   @Post('me/subscription/cancel')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Cancel current user subscription at period end' })
   async cancelMySubscription(@CurrentUser() user: UserSession) {
@@ -183,7 +188,7 @@ export class ProfileController {
   }
 
   @Post('me/subscription/reactivate')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Reactivate current user subscription before period end' })
   async reactivateMySubscription(@CurrentUser() user: UserSession) {
@@ -198,7 +203,40 @@ export class ProfileController {
     @CurrentUser() user: UserSession,
     @Body() dto: UpdateProfileDto,
   ) {
-    return this.profileService.update(user.profileId!, dto);
+    const updated = await this.profileService.update(user.profileId!, dto);
+    return this.profileService.toPrivateProfileResponseForUser(updated);
+  }
+
+  @Post('me/avatar')
+  @UseGuards(AuthGuard, ProfileGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Upload current user avatar image' })
+  async uploadMyAvatar(
+    @CurrentUser() user: UserSession,
+    @Req() request: FastifyRequest,
+    @Headers('content-type') contentType?: string,
+    @Headers('x-file-name') fileName?: string,
+  ) {
+    if (!Buffer.isBuffer(request.body)) {
+      throw new BadRequestException('Avatar image body must be sent as raw bytes');
+    }
+
+    const updated = await this.profileService.uploadAvatar(user.profileId!, {
+      body: request.body,
+      fileName,
+      mimeType: contentType,
+    });
+
+    return this.profileService.toPrivateProfileResponseForUser(updated);
+  }
+
+  @Delete('me/avatar')
+  @UseGuards(AuthGuard, ProfileGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Delete current user avatar image' })
+  async deleteMyAvatar(@CurrentUser() user: UserSession) {
+    const updated = await this.profileService.deleteAvatar(user.profileId!);
+    return this.profileService.toPrivateProfileResponseForUser(updated);
   }
 
   @Delete('me')
@@ -243,6 +281,6 @@ export class ProfileController {
     if (!profile) {
       throw new NotFoundException('Profile not found');
     }
-    return this.profileService.toPrivateProfileResponse(profile);
+    return this.profileService.toPrivateProfileResponseForUser(profile);
   }
 }

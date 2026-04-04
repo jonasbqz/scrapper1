@@ -5,6 +5,11 @@ export interface UserSession {
   email: string;
   name: string;
   profileId?: string;
+  emailVerified: boolean;
+  createdAt?: Date | string | null;
+  hasCredentialAccount: boolean;
+  requiresEmailVerification: boolean;
+  canUseAccountFeatures: boolean;
   session: {
     id: string;
     expiresAt: Date;

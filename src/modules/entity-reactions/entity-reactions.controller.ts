@@ -13,6 +13,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { FastifyRequest } from 'fastify';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { ProfileGuard } from '@/modules/auth/profile.guard';
+import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { resolveOptionalProfileId } from '@/modules/auth/session-resolver';
 import { EntityReactionsService } from './entity-reactions.service';
@@ -44,7 +45,7 @@ export class EntityReactionsController {
   }
 
   @Post(':entityType/:entityId')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Toggle or change reaction for a comic or chapter' })
   async toggleReaction(

@@ -14,6 +14,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags, ApiQuery } from '@nestjs/swagger';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { ProfileGuard } from '@/modules/auth/profile.guard';
+import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { PlaylistsService } from './playlists.service';
 import { CreatePlaylistDto, UpdatePlaylistDto, ReorderPlaylistDto } from './playlists.dto';
@@ -24,7 +25,7 @@ export class PlaylistsController {
   constructor(private playlistsService: PlaylistsService) {}
 
   @Post()
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create a new playlist' })
   async create(
@@ -35,7 +36,7 @@ export class PlaylistsController {
   }
 
   @Get()
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all playlists of the current user' })
   async findByUser(@CurrentUser() user: UserSession) {
@@ -72,7 +73,7 @@ export class PlaylistsController {
   }
 
   @Patch(':id')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update a playlist' })
   async update(
@@ -84,7 +85,7 @@ export class PlaylistsController {
   }
 
   @Delete(':id')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete a playlist' })
   async delete(
@@ -96,7 +97,7 @@ export class PlaylistsController {
   }
 
   @Post(':id/comics/:comicId')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Add a comic to a playlist' })
   async addComic(
@@ -108,7 +109,7 @@ export class PlaylistsController {
   }
 
   @Delete(':id/comics/:comicId')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Remove a comic from a playlist' })
   async removeComic(
@@ -121,7 +122,7 @@ export class PlaylistsController {
   }
 
   @Patch(':id/reorder')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Reorder comics in a playlist' })
   async reorder(

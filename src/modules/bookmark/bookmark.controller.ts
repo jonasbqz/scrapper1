@@ -13,13 +13,14 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { ProfileGuard } from '@/modules/auth/profile.guard';
+import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { BookmarkService } from './bookmark.service';
 import { CreateBookmarkDto, UpdateBookmarkDto } from './bookmark.dto';
 
 @ApiTags('Bookmarks')
 @Controller('bookmarks')
-@UseGuards(AuthGuard, ProfileGuard)
+@UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
 @ApiBearerAuth()
 export class BookmarkController {
   constructor(private bookmarkService: BookmarkService) {}

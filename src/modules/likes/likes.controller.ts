@@ -10,6 +10,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { ProfileGuard } from '@/modules/auth/profile.guard';
+import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { LikesService } from './likes.service';
 
@@ -19,7 +20,7 @@ export class LikesController {
   constructor(private likesService: LikesService) {}
 
   @Post(':comicId')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Toggle like on a comic (add if not exists, remove if exists)' })
   async toggle(
@@ -30,7 +31,7 @@ export class LikesController {
   }
 
   @Get('check/:comicId')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Check if user has liked a comic' })
   async checkLike(
@@ -51,7 +52,7 @@ export class LikesController {
   }
 
   @Get('user')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all comics liked by the current user' })
   async getUserLikes(@CurrentUser() user: UserSession) {
@@ -59,7 +60,7 @@ export class LikesController {
   }
 
   @Delete(':comicId')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Remove like from a comic' })
   async removeLike(

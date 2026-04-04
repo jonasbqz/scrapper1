@@ -12,13 +12,14 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags, ApiQuery } from '@nestjs/swagger';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { ProfileGuard } from '@/modules/auth/profile.guard';
+import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { ReadingHistoryService } from './reading-history.service';
 import { RecordReadingDto } from './reading-history.dto';
 
 @ApiTags('Reading History')
 @Controller('reading-history')
-@UseGuards(AuthGuard, ProfileGuard)
+@UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
 @ApiBearerAuth()
 export class ReadingHistoryController {
   constructor(private readingHistoryService: ReadingHistoryService) {}

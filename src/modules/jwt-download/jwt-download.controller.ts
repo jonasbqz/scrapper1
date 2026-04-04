@@ -1,13 +1,17 @@
-import { Controller, Post, Req, Inject } from "@nestjs/common";
+import { Controller, Post, Req, Inject, ForbiddenException } from "@nestjs/common";
 import { ApiOperation, ApiTags } from "@nestjs/swagger";
 import { FastifyRequest } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "@/database/schema";
 import { DATABASE_CONNECTION } from "@/database/database.module";
-import { profiles, session as authSession } from "@/database/schema";
+import { account, profiles, session as authSession, user as authUser } from "@/database/schema";
 import { auth } from "@/lib/auth";
 import { JwtDownloadService } from "./jwt-download.service";
+import {
+  getEmailVerificationRequiredError,
+  isEmailVerificationRequired,
+} from "@/lib/email-verification-policy";
 
 @ApiTags("Download Token")
 @Controller()
@@ -70,10 +74,36 @@ export class JwtDownloadController {
     }
 
     // Obtener perfil del usuario para saber el plan
-    const profile = await this.db.query.profiles.findFirst({
-      where: eq(profiles.userId, session.user.id),
-      columns: { plan: true, premiumExpireAt: true },
+    const [profile, credentialAccount, authRecord] = await Promise.all([
+      this.db.query.profiles.findFirst({
+        where: eq(profiles.userId, session.user.id),
+        columns: { plan: true, premiumExpireAt: true },
+      }),
+      this.db.query.account.findFirst({
+        where: and(
+          eq(account.userId, session.user.id),
+          eq(account.providerId, "credential"),
+        ),
+        columns: {
+          providerId: true,
+        },
+      }),
+      this.db.query.user.findFirst({
+        where: eq(authUser.id, session.user.id),
+        columns: {
+          emailVerified: true,
+        },
+      }),
+    ]);
+
+    const requiresEmailVerification = isEmailVerificationRequired({
+      emailVerified: authRecord?.emailVerified === true,
+      hasCredentialAccount: credentialAccount?.providerId === "credential",
     });
+
+    if (requiresEmailVerification) {
+      throw new ForbiddenException(getEmailVerificationRequiredError());
+    }
 
     const plan = profile?.plan ?? "basic";
     const premiumExpireAt = profile?.premiumExpireAt ?? null;

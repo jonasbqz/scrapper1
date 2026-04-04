@@ -121,6 +121,62 @@ export class ChapterController {
     };
   }
 
+  private async buildChapterLookupResponse(
+    navigation: Awaited<ReturnType<ChapterService['getNavigation']>>,
+  ) {
+    const chapter = navigation.current;
+    const comic = chapter.comicScan?.comic;
+
+    const comicPath = comic
+      ? await this.routeProtectionService.getComicPath(comic)
+      : null;
+
+    const chapterPath = comic
+      ? await this.routeProtectionService.getChapterPath(comic, chapter, {
+          comicPath: comicPath || undefined,
+        })
+      : null;
+
+    return {
+      data: {
+        id: chapter.id,
+        comic_id: comic?.id || null,
+        comic_slug: comic?.slug || '',
+        protected_route_enabled: comic?.protectedRouteEnabled || false,
+        comic_path: comicPath,
+        chapter_path: chapterPath,
+      },
+    };
+  }
+
+  @Get('lookup/route/:comicSegment/:chapterSegment')
+  @ApiOperation({ summary: 'Resolve chapter path without incrementing views' })
+  async lookupByRoute(
+    @Param('comicSegment') comicSegment: string,
+    @Param('chapterSegment') chapterSegment: string,
+  ) {
+    const resolved = await this.chapterService.findPublicByRouteSegments(
+      decodeURIComponent(comicSegment),
+      decodeURIComponent(chapterSegment),
+    );
+
+    return this.buildChapterLookupResponse(resolved.navigation);
+  }
+
+  @Get('lookup/id/:id')
+  @ApiOperation({ summary: 'Resolve chapter path by id without incrementing views' })
+  async lookupById(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() request: FastifyRequest,
+  ) {
+    const nav = await this.chapterService.getNavigation(id);
+    await this.routeProtectionService.assertLegacyAccess(
+      nav.current.comicScan?.comic,
+      request.headers,
+    );
+    return this.buildChapterLookupResponse(nav);
+  }
+
   @Get('route/:comicSegment/:chapterSegment')
   @ApiOperation({ summary: 'Get chapter by protected route with navigation' })
   async findByRoute(

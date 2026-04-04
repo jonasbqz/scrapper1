@@ -133,6 +133,39 @@ export class ComicService {
     return this.findById(comic.id);
   }
 
+  async findLookupByRouteSegment(segment: string) {
+    const comic = await this.resolveComicRouteSegment(segment);
+
+    return {
+      id: comic.id,
+      slug: comic.slug,
+      protectedRouteEnabled: comic.protectedRouteEnabled ?? false,
+      comicPath: await this.routeProtectionService.getComicPath(comic),
+    };
+  }
+
+  async findLookupById(id: number) {
+    const comic = await this.db.query.comics.findFirst({
+      where: eq(comics.id, id),
+      columns: {
+        id: true,
+        slug: true,
+        protectedRouteEnabled: true,
+      },
+    });
+
+    if (!comic) {
+      throw new NotFoundException('Comic not found');
+    }
+
+    return {
+      id: comic.id,
+      slug: comic.slug,
+      protectedRouteEnabled: comic.protectedRouteEnabled ?? false,
+      comicPath: await this.routeProtectionService.getComicPath(comic),
+    };
+  }
+
   async findAll(filters: ComicFilters = {}) {
     const cacheKey = this.cacheService.buildComicListKey(filters);
     const ttl = filters.search ? CACHE_TTL.VERY_SHORT : CACHE_TTL.SHORT;

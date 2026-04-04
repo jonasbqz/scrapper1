@@ -9,9 +9,10 @@ import { FastifyRequest } from 'fastify';
 import { auth } from '@/lib/auth';
 import { DATABASE_CONNECTION } from '@/database/database.module';
 import { eq } from 'drizzle-orm';
-import { profiles } from '@/database/schema';
+import { account, profiles } from '@/database/schema';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
+import { isEmailVerificationRequired } from '@/lib/email-verification-policy';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -32,6 +33,24 @@ export class AuthGuard implements CanActivate {
       if (!session?.user) {
         throw new UnauthorizedException('Not authenticated');
       }
+
+      const sessionUser = session.user as typeof session.user & {
+        createdAt?: Date | string | null;
+        emailVerified?: boolean | null;
+      };
+      const userAccounts = await this.db.query.account.findMany({
+        where: eq(account.userId, session.user.id),
+        columns: {
+          providerId: true,
+        },
+      });
+      const hasCredentialAccount = userAccounts.some(
+        (entry) => entry.providerId === 'credential',
+      );
+      const requiresEmailVerification = isEmailVerificationRequired({
+        emailVerified: sessionUser.emailVerified === true,
+        hasCredentialAccount,
+      });
 
       // Find profile by userId
       let profile = await this.db.query.profiles.findFirst({
@@ -77,6 +96,11 @@ export class AuthGuard implements CanActivate {
         email: session.user.email,
         name: session.user.name,
         profileId: profile?.id,
+        emailVerified: sessionUser.emailVerified === true,
+        createdAt: sessionUser.createdAt ?? null,
+        hasCredentialAccount,
+        requiresEmailVerification,
+        canUseAccountFeatures: !requiresEmailVerification,
         session: session.session,
       };
 

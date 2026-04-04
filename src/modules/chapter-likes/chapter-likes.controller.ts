@@ -10,6 +10,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { ProfileGuard } from '@/modules/auth/profile.guard';
+import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { ChapterLikesService } from './chapter-likes.service';
 
@@ -19,7 +20,7 @@ export class ChapterLikesController {
   constructor(private chapterLikesService: ChapterLikesService) {}
 
   @Post(':chapterId')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Toggle like on a chapter (add if not exists, remove if exists)' })
   async toggle(
@@ -30,7 +31,7 @@ export class ChapterLikesController {
   }
 
   @Get('check/:chapterId')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Check if user has liked a chapter' })
   async checkLike(
@@ -51,7 +52,7 @@ export class ChapterLikesController {
   }
 
   @Get('user')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all chapters liked by the current user' })
   async getUserChapterLikes(@CurrentUser() user: UserSession) {
@@ -59,7 +60,7 @@ export class ChapterLikesController {
   }
 
   @Delete(':chapterId')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Remove like from a chapter' })
   async removeLike(
