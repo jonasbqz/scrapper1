@@ -12,7 +12,6 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags, ApiQuery } from '@nestjs/swagger';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { ProfileGuard } from '@/modules/auth/profile.guard';
-import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { ReadingHistoryService } from './reading-history.service';
 import { RecordReadingDto } from './reading-history.dto';
@@ -56,7 +55,6 @@ export class ReadingHistoryController {
   }
 
   @Post()
-  @UseGuards(VerifiedEmailGuard)
   @ApiOperation({ summary: 'Record reading progress' })
   async record(
     @CurrentUser() user: UserSession,
@@ -115,7 +113,6 @@ export class ReadingHistoryController {
   }
 
   @Delete(':id')
-  @UseGuards(VerifiedEmailGuard)
   @ApiOperation({ summary: 'Delete reading history entry' })
   async delete(
     @CurrentUser() user: UserSession,

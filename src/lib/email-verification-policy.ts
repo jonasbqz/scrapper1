@@ -21,9 +21,9 @@ export function getEmailVerificationRequiredFrom(): Date | null {
 
 export function isEmailVerificationRequired(params: {
   emailVerified: boolean | null | undefined;
-  hasCredentialAccount: boolean;
+  hasCredentialAccount?: boolean;
 }) {
-  return params.hasCredentialAccount && params.emailVerified !== true;
+  return params.emailVerified !== true;
 }
 
 export function isVerificationCleanupEligible(params: {

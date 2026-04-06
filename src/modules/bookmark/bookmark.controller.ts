@@ -13,7 +13,6 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { ProfileGuard } from '@/modules/auth/profile.guard';
-import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { BookmarkService } from './bookmark.service';
 import { CreateBookmarkDto, UpdateBookmarkDto } from './bookmark.dto';
@@ -44,7 +43,6 @@ export class BookmarkController {
   }
 
   @Post()
-  @UseGuards(VerifiedEmailGuard)
   @ApiOperation({ summary: 'Create or update bookmark' })
   async upsert(
     @CurrentUser() user: UserSession,
@@ -92,7 +90,6 @@ export class BookmarkController {
   }
 
   @Put(':comicId')
-  @UseGuards(VerifiedEmailGuard)
   @ApiOperation({ summary: 'Update bookmark' })
   async update(
     @CurrentUser() user: UserSession,
@@ -104,7 +101,6 @@ export class BookmarkController {
   }
 
   @Delete(':comicId')
-  @UseGuards(VerifiedEmailGuard)
   @ApiOperation({ summary: 'Delete bookmark' })
   async delete(
     @CurrentUser() user: UserSession,

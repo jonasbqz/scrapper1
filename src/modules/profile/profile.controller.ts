@@ -196,7 +196,7 @@ export class ProfileController {
   }
 
   @Put('me')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update current user profile' })
   async updateMe(
@@ -208,7 +208,7 @@ export class ProfileController {
   }
 
   @Post('me/avatar')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Upload current user avatar image' })
   async uploadMyAvatar(
@@ -231,7 +231,7 @@ export class ProfileController {
   }
 
   @Delete('me/avatar')
-  @UseGuards(AuthGuard, ProfileGuard)
+  @UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete current user avatar image' })
   async deleteMyAvatar(@CurrentUser() user: UserSession) {

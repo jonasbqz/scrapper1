@@ -14,7 +14,6 @@ import { FastifyRequest } from 'fastify';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@/modules/auth/auth.guard';
 import { ProfileGuard } from '@/modules/auth/profile.guard';
-import { VerifiedEmailGuard } from '@/modules/auth/verified-email.guard';
 import { CurrentUser, UserSession } from '@/modules/auth/current-user.decorator';
 import { MediaService } from './media.service';
 import {
@@ -25,7 +24,7 @@ import {
 
 @ApiTags('Media')
 @Controller('media')
-@UseGuards(AuthGuard, ProfileGuard, VerifiedEmailGuard)
+@UseGuards(AuthGuard, ProfileGuard)
 @ApiBearerAuth()
 export class MediaController {
   constructor(private readonly mediaService: MediaService) {}
