@@ -184,8 +184,11 @@ export class ComicService {
     const conditions = [];
 
     // Build tsquery for full-text search (used for filtering and ranking)
-    const searchTsquery = search
-      ? sql`to_tsquery('simple', unaccent(${search.trim().split(/\s+/).map(w => w + ':*').join(' & ')}))`
+    // websearch_to_tsquery is resilient to punctuation/quotes/CJK input and won't
+    // explode with syntax errors like raw to_tsquery(...) can.
+    const normalizedSearch = search?.trim();
+    const searchTsquery = normalizedSearch
+      ? sql`websearch_to_tsquery('simple', unaccent(${normalizedSearch}))`
       : null;
 
     if (search && searchTsquery) {
@@ -304,7 +307,7 @@ export class ComicService {
     let total = Number(countResult[0]?.count || 0);
 
     // Fallback to pg_trgm similarity when tsquery returns no results
-    if (orderedComicIds.length === 0 && search) {
+    if (orderedComicIds.length === 0 && normalizedSearch) {
       // Build non-search conditions (type, status, nsfw, genres)
       const baseConditions: (typeof conditions[number])[] = [];
       if (type) baseConditions.push(eq(comics.type, type));
