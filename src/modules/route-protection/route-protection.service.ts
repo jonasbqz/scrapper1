@@ -2,7 +2,7 @@ import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CacheService } from '@/cache/cache.service';
 
-const ROUTE_CODE_TTL_MS = 12 * 60 * 60 * 1000;
+const ROUTE_CODE_TTL_MS = 16 * 60 * 60 * 1000;
 const UNAVAILABLE_MESSAGE =
   'No fue posible encontrar ese contenido ahora. Puedes volver y buscar otro contenido.';
 

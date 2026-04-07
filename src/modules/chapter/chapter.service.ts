@@ -1,11 +1,10 @@
 import { Injectable, Inject, NotFoundException } from '@nestjs/common';
 import { eq, desc, sql, and, gt, lt, gte } from 'drizzle-orm';
 import { DATABASE_CONNECTION } from '@/database/database.module';
-import { chapters, comicScans } from '@/database/schema';
+import { chapters } from '@/database/schema';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
 import { CacheService, CACHE_TTL, CACHE_KEYS } from '@/cache/cache.service';
-import { ComicService } from '@/modules/comic/comic.service';
 import { RouteProtectionService } from '@/modules/route-protection/route-protection.service';
 
 @Injectable()
@@ -14,9 +13,20 @@ export class ChapterService {
     @Inject(DATABASE_CONNECTION)
     private db: NodePgDatabase<typeof schema>,
     private cacheService: CacheService,
-    private comicService: ComicService,
     private routeProtectionService: RouteProtectionService,
   ) {}
+
+  private matchesComicSegment(
+    comicSegment: string,
+    comic: { id: number; slug: string },
+  ): boolean {
+    if (/^\d+$/.test(comicSegment)) {
+      return Number(comicSegment) === comic.id;
+    }
+
+    const parsedComic = this.routeProtectionService.parseComicSegment(comicSegment);
+    return parsedComic.slug === comic.slug;
+  }
 
   async findByComicScan(comicScanId: number) {
     const cacheKey = `${CACHE_KEYS.CHAPTERS_BY_COMIC_SCAN}:${comicScanId}`;
@@ -96,7 +106,6 @@ export class ChapterService {
   }
 
   async findPublicByRouteSegments(comicSegment: string, chapterSegment: string) {
-    const comic = await this.comicService.resolveComicRouteSegment(comicSegment);
     const parsedChapter = this.routeProtectionService.parseChapterSegment(chapterSegment);
 
     if (!parsedChapter.chapterId) {
@@ -104,9 +113,13 @@ export class ChapterService {
     }
 
     const navigation = await this.getNavigation(parsedChapter.chapterId);
-    const chapterComicId = navigation.current.comicScan?.comic?.id;
+    const comic = navigation.current.comicScan?.comic;
 
-    if (!chapterComicId || chapterComicId !== comic.id) {
+    if (!comic?.id) {
+      throw this.routeProtectionService.createUnavailableException();
+    }
+
+    if (!this.matchesComicSegment(comicSegment, comic)) {
       throw this.routeProtectionService.createUnavailableException();
     }
 
