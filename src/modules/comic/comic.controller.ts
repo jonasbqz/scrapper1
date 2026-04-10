@@ -14,6 +14,7 @@ import { AuthGuard } from '@/modules/auth/auth.guard';
 import { AdminGuard } from '@/modules/auth/admin.guard';
 import { RouteProtectionService } from '@/modules/route-protection/route-protection.service';
 import type { FastifyRequest } from 'fastify';
+import { SearchAbuseService } from './search-abuse.service';
 
 @ApiTags('Comics')
 @Controller('comics')
@@ -21,6 +22,7 @@ export class ComicController {
   constructor(
     private comicService: ComicService,
     private routeProtectionService: RouteProtectionService,
+    private searchAbuseService: SearchAbuseService,
   ) {}
 
   private parseBatchIds(ids?: string): number[] {
@@ -59,18 +61,39 @@ export class ComicController {
     @Query('limit') limit?: string,
     @Query('orderBy') orderBy?: string,
     @Query('isDesc') isDesc?: string,
+    @Req() request?: FastifyRequest,
   ) {
+    const inspection = request
+      ? await this.searchAbuseService.inspectSearch(search, request)
+      : { action: 'allow' as const, search: search?.trim() || '' };
+
+    if (inspection.action === 'reject') {
+      throw this.searchAbuseService.createRateLimitException();
+    }
+
+    const parsedLimit = limit ? parseInt(limit, 10) : 20;
+    const safeLimit = inspection.search
+      ? Math.min(parsedLimit, 30)
+      : parsedLimit;
+
     const filters: ComicFilters = {
-      search,
+      search: inspection.search,
       type,
       status,
       genreNames: genres ? genres.split(',').map(g => g.trim()).filter(Boolean) : undefined,
       isNsfw: nsfw === 'false' ? false : nsfw === 'true' ? true : undefined,
       page: page ? parseInt(page, 10) : 1,
-      limit: limit ? parseInt(limit, 10) : 20,
+      limit: safeLimit,
       orderBy: (orderBy as ComicFilters['orderBy']) || 'recent_chapter',
       isDesc: isDesc !== 'false',
     };
+
+    if (inspection.action === 'empty') {
+      return this.comicService.buildEmptySearchResponse(
+        filters.page,
+        filters.limit,
+      );
+    }
 
     return this.comicService.findAll(filters);
   }

@@ -177,6 +177,23 @@ export class ComicService {
     );
   }
 
+  async buildEmptySearchResponse(page = 1, limit = 20) {
+    const allGenres = await this.db.query.genres.findMany({
+      orderBy: [genres.name],
+    });
+
+    return {
+      data: [],
+      pagination: {
+        page,
+        limit,
+        total: 0,
+        totalPages: 0,
+      },
+      genres: allGenres.map((genre) => genre.name),
+    };
+  }
+
   private async findAllFromDb(filters: ComicFilters = {}) {
     const { search, type, status, genreIds, genreNames, isNsfw, page = 1, limit = 20, orderBy = 'recent_chapter', isDesc = true } = filters;
     const offset = (page - 1) * limit;
