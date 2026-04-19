@@ -27,6 +27,7 @@ import { RouteProtectionService } from '../route-protection/route-protection.ser
 /** Allowed count values for the bulk next-chapters endpoint */
 const ALLOWED_COUNTS = [5, 10, 25, 50] as const;
 type AllowedCount = (typeof ALLOWED_COUNTS)[number];
+const MAX_LOOKUP_BATCH_IDS = 50;
 
 /** Counts that require a valid premium subscription */
 const PREMIUM_COUNTS: AllowedCount[] = [25, 50];
@@ -55,7 +56,7 @@ export class ChapterController {
           .map((value) => Number.parseInt(value.trim(), 10))
           .filter((value) => Number.isInteger(value) && value > 0),
       ),
-    );
+    ).slice(0, MAX_LOOKUP_BATCH_IDS);
   }
 
   private async buildChapterResponse(navigation: Awaited<ReturnType<ChapterService['getNavigation']>>) {
@@ -205,8 +206,8 @@ export class ChapterController {
   ) {
     const chapterIds = this.parseBatchIds(ids);
 
-    const results = await Promise.all(
-      chapterIds.map(async (id) => {
+    const results = [];
+    for (const id of chapterIds) {
         try {
           const navigation = await this.chapterService.getNavigation(id);
           await this.routeProtectionService.assertLegacyAccess(
@@ -214,15 +215,14 @@ export class ChapterController {
             request.headers,
           );
           const payload = await this.buildChapterLookupResponse(navigation);
-          return payload.data;
+          results.push(payload.data);
         } catch {
-          return null;
+          // Skip chapters that no longer exist or are not visible for this request.
         }
-      }),
-    );
+    }
 
     return {
-      data: results.filter(Boolean),
+      data: results,
     };
   }
 

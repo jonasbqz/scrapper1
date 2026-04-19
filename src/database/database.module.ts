@@ -14,9 +14,13 @@ export const DATABASE_CONNECTION = 'DATABASE_CONNECTION';
       useFactory: async (configService: ConfigService) => {
         const pool = new Pool({
           connectionString: configService.get<string>('DATABASE_URL'),
-          max: 10,
-          idleTimeoutMillis: 30000,
-          connectionTimeoutMillis: 5000,
+          max: Number(configService.get<string>('DB_POOL_MAX') || 20),
+          idleTimeoutMillis: Number(
+            configService.get<string>('DB_IDLE_TIMEOUT_MS') || 30000,
+          ),
+          connectionTimeoutMillis: Number(
+            configService.get<string>('DB_CONNECTION_TIMEOUT_MS') || 10000,
+          ),
         });
 
         return drizzle(pool, { schema });

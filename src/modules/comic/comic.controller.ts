@@ -16,6 +16,8 @@ import { RouteProtectionService } from '@/modules/route-protection/route-protect
 import type { FastifyRequest } from 'fastify';
 import { SearchAbuseService } from './search-abuse.service';
 
+const MAX_LOOKUP_BATCH_IDS = 50;
+
 @ApiTags('Comics')
 @Controller('comics')
 export class ComicController {
@@ -37,7 +39,7 @@ export class ComicController {
           .map((value) => Number.parseInt(value.trim(), 10))
           .filter((value) => Number.isInteger(value) && value > 0),
       ),
-    );
+    ).slice(0, MAX_LOOKUP_BATCH_IDS);
   }
 
   @Get()
@@ -213,23 +215,22 @@ export class ComicController {
   ) {
     const comicIds = this.parseBatchIds(ids);
 
-    const results = await Promise.all(
-      comicIds.map(async (id) => {
+    const results = [];
+    for (const id of comicIds) {
         try {
           const comic = await this.comicService.findLookupById(id);
           await this.routeProtectionService.assertLegacyAccess(
             comic,
             request.headers,
           );
-          return comic;
+          results.push(comic);
         } catch {
-          return null;
+          // Skip comics that no longer exist or are not visible for this request.
         }
-      }),
-    );
+    }
 
     return {
-      data: results.filter(Boolean),
+      data: results,
     };
   }
 

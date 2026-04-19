@@ -78,22 +78,21 @@ export class ChapterService {
       async () => {
         const chapter = await this.findById(chapterId);
 
-        const [prevChapter, nextChapter] = await Promise.all([
-          this.db.query.chapters.findFirst({
-            where: and(
-              eq(chapters.comicScanId, chapter.comicScanId),
-              lt(chapters.chapterNumber, chapter.chapterNumber),
-            ),
-            orderBy: [desc(chapters.chapterNumber)],
-          }),
-          this.db.query.chapters.findFirst({
-            where: and(
-              eq(chapters.comicScanId, chapter.comicScanId),
-              gt(chapters.chapterNumber, chapter.chapterNumber),
-            ),
-            orderBy: [chapters.chapterNumber],
-          }),
-        ]);
+        const prevChapter = await this.db.query.chapters.findFirst({
+          where: and(
+            eq(chapters.comicScanId, chapter.comicScanId),
+            lt(chapters.chapterNumber, chapter.chapterNumber),
+          ),
+          orderBy: [desc(chapters.chapterNumber)],
+        });
+
+        const nextChapter = await this.db.query.chapters.findFirst({
+          where: and(
+            eq(chapters.comicScanId, chapter.comicScanId),
+            gt(chapters.chapterNumber, chapter.chapterNumber),
+          ),
+          orderBy: [chapters.chapterNumber],
+        });
 
         return {
           current: chapter,

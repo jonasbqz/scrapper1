@@ -109,20 +109,14 @@ export class CacheService {
     fn: () => Promise<T>,
     ttl: number = CACHE_TTL.MEDIUM,
   ): Promise<T> {
-    try {
-      const cached = await this.get<T>(key);
-      if (cached !== undefined && cached !== null) {
-        return cached;
-      }
-
-      const result = await fn();
-      await this.set(key, result, ttl);
-      return result;
-    } catch (error) {
-      console.error(`Cache wrap error for key ${key}:`, error);
-      // On cache error, just execute the function
-      return fn();
+    const cached = await this.get<T>(key);
+    if (cached !== undefined && cached !== null) {
+      return cached;
     }
+
+    const result = await fn();
+    await this.set(key, result, ttl);
+    return result;
   }
 
   /**
@@ -219,4 +213,3 @@ export class CacheService {
     return [];
   }
 }
-
