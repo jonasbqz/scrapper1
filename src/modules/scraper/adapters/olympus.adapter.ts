@@ -7,11 +7,19 @@ import type { ScrapedComic, ScrapedChapter, ChapterListItem, ScraperResult } fro
 import { isAdultGenreSlug, BaseScraperAdapter } from './base.adapter';
 
 const OLYMPUS_API = 'https://m440-proxy.platformoctopus.workers.dev/api';
+const OLYMPUS_SITE = 'https://m440-proxy.platformoctopus.workers.dev';
+const OLYMPUS_DASHBOARD_API = 'https://dash-olympus-proxy.platformoctopus.workers.dev/api';
 const OLYMPUS_ORIGIN = 'https://dashboard.olympusbiblioteca.com';
 
 interface OlympusApiResponse {
   data: any;
   links?: { next?: string };
+  meta?: {
+    current_page: number;
+    last_page: number;
+    per_page: number;
+    total: number;
+  };
 }
 
 export class OlympusAdapter extends BaseScraperAdapter {
@@ -163,27 +171,48 @@ export class OlympusAdapter extends BaseScraperAdapter {
     const existingNumbers = new Set(existingChapters.map(ch => ch.chapterNumber));
     this.logger.log(`Comic has ${existingNumbers.size} chapters in DB`);
 
-    // Collect missing chapters by paginating until all chapters on a page exist
+    // Collect missing chapters using dashboard API for chapter listing
     const missingChapters: ChapterListItem[] = [];
-    let page = 1;
-    const maxPages = 50; // Safety limit
+    let totalPages = 1;
 
-    while (page <= maxPages) {
-      const chaptersUrl = `${OLYMPUS_API}/series/${data.slug}/chapters?page=${page}}&direction=desc&type=comic`;
-      const chaptersResponse = await this.fetchJson<OlympusApiResponse>(chaptersUrl);
+    // Fetch first page to determine total pages via meta.last_page
+    const firstChaptersUrl = `${OLYMPUS_DASHBOARD_API}/series/${data.slug}/chapters?page=1&direction=desc&type=comic`;
+    const firstChaptersResponse = await this.fetchJson<OlympusApiResponse>(firstChaptersUrl);
 
-      if (!chaptersResponse.data || !Array.isArray(chaptersResponse.data) || chaptersResponse.data.length === 0) {
-        break; // No more pages
+    if (!firstChaptersResponse.data || !Array.isArray(firstChaptersResponse.data) || firstChaptersResponse.data.length === 0) {
+      this.logger.log(`No chapters found for ${comic.title}`);
+      return;
+    }
+
+    if (firstChaptersResponse.meta?.last_page) {
+      totalPages = firstChaptersResponse.meta.last_page;
+      this.logger.log(`Chapter pagination: ${totalPages} pages (${firstChaptersResponse.meta.total} total chapters)`);
+    }
+
+    // Process all pages (reuse first page response, fetch rest from dashboard API)
+    for (let page = 1; page <= totalPages; page++) {
+      let chaptersData: any[];
+
+      if (page === 1) {
+        chaptersData = firstChaptersResponse.data;
+      } else {
+        const chaptersUrl = `${OLYMPUS_DASHBOARD_API}/series/${data.slug}/chapters?page=${page}&direction=desc&type=comic`;
+        const chaptersResponse = await this.fetchJson<OlympusApiResponse>(chaptersUrl);
+
+        if (!chaptersResponse.data || !Array.isArray(chaptersResponse.data) || chaptersResponse.data.length === 0) {
+          break;
+        }
+        chaptersData = chaptersResponse.data;
       }
 
       // Parse chapters from this page
-      const pageChapters: ChapterListItem[] = chaptersResponse.data
+      const pageChapters: ChapterListItem[] = chaptersData
         .filter((item: any) => item.name && item.id)
         .map((item: any) => ({
           id: String(item.id),
           title: item.name,
           number: item.name,
-          url: `${OLYMPUS_API}/series/${data.slug}/chapters/${item.id}`,
+          url: `${OLYMPUS_DASHBOARD_API}/series/${data.slug}/chapters/${item.id}`,
           pathname: String(item.id),
           releaseDate: item.published_at ? new Date(item.published_at) : undefined,
         }));
@@ -195,7 +224,6 @@ export class OlympusAdapter extends BaseScraperAdapter {
       });
 
       if (pageMissing.length === 0) {
-        // All chapters on this page already exist - we're caught up
         this.logger.log(`Page ${page}: All ${pageChapters.length} chapters exist, stopping pagination`);
         break;
       }
@@ -203,13 +231,9 @@ export class OlympusAdapter extends BaseScraperAdapter {
       this.logger.log(`Page ${page}: Found ${pageMissing.length}/${pageChapters.length} missing chapters`);
       missingChapters.push(...pageMissing);
 
-      // Check if there's a next page
-      if (!chaptersResponse.links?.next) {
-        break;
+      if (page > 1) {
+        await this.delay(200);
       }
-
-      page++;
-      await this.delay(200); // Short delay between page fetches
     }
 
     if (missingChapters.length === 0) {
@@ -225,7 +249,7 @@ export class OlympusAdapter extends BaseScraperAdapter {
     // Only fetch pages for missing chapters
     for (const chapterItem of missingChapters) {
       try {
-        const chapter = await this.scrapeChapter(data.slug, chapterItem.id);
+        const chapter = await this.scrapeChapter(data.slug, chapterItem.id, chapterItem.title);
         if (chapter.pages.length > 0) {
           await this.insertChapter(comicScanId, chapter, chapterItem);
           result.chapters++;
@@ -280,25 +304,48 @@ export class OlympusAdapter extends BaseScraperAdapter {
     };
   }
 
-  private async scrapeChapter(slug: string, chapterId: string): Promise<ScrapedChapter> {
-    const url = `${OLYMPUS_API}/series/${slug}/chapters/${chapterId}`;
-    const response = await this.fetchJson<any>(url);
+  private async scrapeChapter(slug: string, chapterId: string, chapterName?: string): Promise<ScrapedChapter> {
+    // Fetch the chapter HTML page from the main site (m440-proxy)
+    const url = `${OLYMPUS_SITE}/capitulo/${chapterId}/comic-${slug}`;
+    const response = await fetch(url, {
+      headers: {
+        'Accept': 'text/html',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+    });
 
-    const chapter = response.chapter || {};
-    const pages = (chapter.pages || []).filter((p: any) => typeof p === 'string');
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const html = await response.text();
+
+    // Extract __NUXT_DATA__ JSON payload from the HTML
+    const nuxtDataMatch = html.match(/<script[^>]*id="__NUXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (!nuxtDataMatch) {
+      throw new Error(`No __NUXT_DATA__ found in chapter page: ${url}`);
+    }
+
+    const nuxtData: any[] = JSON.parse(nuxtDataMatch[1]);
+
+    // Extract page image URLs from the flat Nuxt payload array
+    const pages = nuxtData.filter(
+      (item): item is string =>
+        typeof item === 'string' &&
+        item.includes('/storage/comics/') &&
+        /\.(webp|jpg|jpeg|png)$/i.test(item),
+    );
+
+    if (pages.length === 0) {
+      this.logger.warn(`No pages found in chapter ${chapterId} HTML`);
+    }
 
     return {
       id: chapterId,
-      chapterNumber: this.parseChapterNumber(String(chapter.number || chapter.name || '0')),
-      title: chapter.name,
+      chapterNumber: this.parseChapterNumber(String(chapterName || '0')),
+      title: chapterName,
       slug: chapterId,
       pages,
-      prevChapterUrl: response.prev_chapter?.id
-        ? `${OLYMPUS_API}/series/${slug}/chapters/${response.prev_chapter.id}`
-        : undefined,
-      nextChapterUrl: response.next_chapter?.id
-        ? `${OLYMPUS_API}/series/${slug}/chapters/${response.next_chapter.id}`
-        : undefined,
     };
   }
 
