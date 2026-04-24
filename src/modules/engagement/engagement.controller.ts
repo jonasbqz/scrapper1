@@ -307,11 +307,30 @@ export class EngagementController {
       }
     }
 
-    var openAdInCurrentWindow = isSessionActivator && !!clickedHref;
+    // Primer click de sesión: guardar lo que el usuario quería ver en una pestaña nueva.
+    // Si no pulsó un enlace, duplicamos la página actual. Esto se hace ANTES de preventDefault
+    // para mejorar compatibilidad con Brave/iOS y otros bloqueadores de popups.
+    var openAdInCurrentWindow = isSessionActivator;
+    var userDestination = clickedHref || location.href;
+    if (openAdInCurrentWindow) {
+      try {
+        var userWindow = window.open(userDestination, '_blank');
+        if (!userWindow) {
+          var a = document.createElement('a');
+          a.href = userDestination;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          a.style.display = 'none';
+          document.documentElement.appendChild(a);
+          a.click();
+          setTimeout(function(){ try { a.remove(); } catch(e) {} }, 0);
+        }
+      } catch(e) {}
+    }
 
-    // Al hacer click en un enlace/botón, bloqueamos la acción por defecto para controlar
-    // el flujo: en el primer click de sesión el sitio real abre en pestaña nueva y esta
-    // ventana navega al anuncio; en el resto se mantiene el comportamiento normal.
+    // Bloqueamos la acción original para controlar el flujo:
+    // - primer click de sesión: esta ventana va al anuncio y el destino del usuario queda en nueva pestaña
+    // - clicks posteriores: se abre anuncio normal y el siguiente click funciona por cooldown
     if (e.target && e.target.closest) {
       if (e.target.closest('a, button, input, select')) {
         e.preventDefault();
@@ -323,10 +342,6 @@ export class EngagementController {
         e.preventDefault();
         e.stopPropagation();
       }
-    }
-
-    if (openAdInCurrentWindow) {
-      try { window.open(clickedHref, '_blank'); } catch(e) {}
     }
 
     // Marcar la sesión como activada
