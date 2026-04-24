@@ -183,6 +183,14 @@ export class ComicController {
     return this.comicService.getRecommendations(id, limit ? parseInt(limit, 10) : 10, isNsfw);
   }
 
+  @Get('lookup/route')
+  @ApiOperation({ summary: 'Resolve comic path without incrementing views' })
+  async lookupByRouteQuery(@Query('segment') segment: string) {
+    return this.comicService.findLookupByRouteSegment(
+      decodeURIComponent(segment || ''),
+    );
+  }
+
   @Get('lookup/route/:segment')
   @ApiOperation({ summary: 'Resolve comic path without incrementing views' })
   async lookupByRouteSegment(@Param('segment') segment: string) {
@@ -232,6 +240,16 @@ export class ComicController {
     return {
       data: results,
     };
+  }
+
+  @Get('route')
+  @ApiOperation({ summary: 'Get comic by protected route segment' })
+  async findByRouteQuery(@Query('segment') segment: string) {
+    const comic = await this.comicService.findPublicByRouteSegment(
+      decodeURIComponent(segment || ''),
+    );
+    await this.comicService.incrementViews(comic.id);
+    return comic;
   }
 
   @Get('route/:segment')
