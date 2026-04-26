@@ -553,12 +553,18 @@ export class SubscriptionsService {
       if (profile.stripeCancelAtPeriodEnd) {
         subscription = await this.retrieveStripeSubscription(profile.stripeSubscriptionId);
       } else {
-        subscription = await this.updateStripeSubscription(
-          profile.stripeSubscriptionId,
-          new URLSearchParams({
-            cancel_at_period_end: 'true',
-          }),
-        );
+        const currentSubscription = await this.retrieveStripeSubscription(profile.stripeSubscriptionId);
+
+        if (this.canScheduleStripeSubscriptionCancelation(currentSubscription)) {
+          subscription = await this.updateStripeSubscription(
+            profile.stripeSubscriptionId,
+            new URLSearchParams({
+              cancel_at_period_end: 'true',
+            }),
+          );
+        } else {
+          subscription = currentSubscription;
+        }
       }
 
       nextProfile = await this.syncProfileFromStripeSubscription(profile, subscription);
@@ -700,6 +706,13 @@ export class SubscriptionsService {
       profile.premiumSource === 'stripe' ||
       this.canManageStripeSubscription(profile)
     );
+  }
+
+  private canScheduleStripeSubscriptionCancelation(subscription: StripeSubscription) {
+    return ![
+      'canceled',
+      'incomplete_expired',
+    ].includes(subscription.status);
   }
 
   private verifyWebhookSignature(rawBody: Buffer, signatureHeader: string) {
