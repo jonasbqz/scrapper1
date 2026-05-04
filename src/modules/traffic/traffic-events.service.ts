@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Interval } from '@nestjs/schedule';
 import type { FastifyRequest } from 'fastify';
 import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
@@ -35,9 +36,27 @@ type CounterSignals = {
   minuteContentViews: number;
   repeatedSearches: number;
   repeatedPathHits: number;
+  uniquePaths10m: number;
+  uniqueSearches10m: number;
   riskScore: number;
   reasons: string[];
 };
+
+type TrafficEventPersistencePayload = typeof trafficEvents.$inferInsert & {
+  occurredAt?: Date;
+};
+
+type TrafficAggregatePayload = TrafficEventPersistencePayload & {
+  uniquePathHit: number;
+  uniqueSearchHit: number;
+};
+
+const HOUR_MS = 60 * 60 * 1000;
+const DEFAULT_RAW_MIN_RISK_SCORE = 35;
+const DEFAULT_RAW_SAMPLE_RATE = 0.002; // 0.2% of low-risk traffic, enough for debugging without DB explosion.
+const DEFAULT_RAW_RETENTION_DAYS = 2;
+const DEFAULT_AGGREGATE_RETENTION_DAYS = 30;
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 @Injectable()
 export class TrafficEventsService {
@@ -106,7 +125,20 @@ export class TrafficEventsService {
     );
     const action = input.action || actionFromRiskScore(riskScore);
 
-    await this.persistEvent({
+    const uniquePathHit = await this.trackUniqueValue(
+      `traffic:${subjectKey}:paths:10m`,
+      path,
+      10 * 60 * 1000,
+    );
+    const uniqueSearchHit = input.searchQuery
+      ? await this.trackUniqueValue(
+          `traffic:${subjectKey}:search-values:10m`,
+          input.searchQuery.toLowerCase(),
+          10 * 60 * 1000,
+        )
+      : 0;
+
+    const eventPayload: TrafficEventPersistencePayload = {
       eventType: input.eventType,
       action,
       subjectKey,
@@ -130,7 +162,19 @@ export class TrafficEventsService {
         watchedAsns: this.watchAsns,
         counters,
       },
+    };
+
+    await this.persistAggregate({
+      ...eventPayload,
+      uniquePathHit,
+      uniqueSearchHit,
     });
+
+    if (await this.shouldPersistRawEvent(eventPayload)) {
+      await this.persistEvent(eventPayload);
+    }
+
+    void this.cleanupOldTrafficData();
 
     return { action, riskScore, reasons };
   }
@@ -186,23 +230,28 @@ export class TrafficEventsService {
         max(user_id) as "userId",
         count(distinct user_id)::int as "userCount",
         max(user_agent) as "lastUserAgent",
-        max(path) as "lastPath",
-        min(occurred_at) as "firstSeenAt",
-        max(occurred_at) as "lastSeenAt",
-        count(*)::int as "events",
-        count(*) filter (where event_type = 'comic_search')::int as "searches",
-        count(*) filter (where event_type in ('comic_view', 'chapter_view', 'chapter_pages'))::int as "contentViews",
-        count(distinct path)::int as "uniquePaths",
-        count(distinct search_query)::int as "uniqueSearches",
-        max(risk_score)::int as "maxRiskScore",
-        avg(risk_score)::float as "avgRiskScore",
+        max(last_path) as "lastPath",
+        min(first_seen_at) as "firstSeenAt",
+        max(last_seen_at) as "lastSeenAt",
+        sum(total_events)::int as "events",
+        sum(search_events)::int as "searches",
+        sum(content_events)::int as "contentViews",
+        sum(lookup_events)::int as "lookupEvents",
+        sum(unique_path_hits)::int as "uniquePaths",
+        sum(unique_search_hits)::int as "uniqueSearches",
+        max(max_risk_score)::int as "maxRiskScore",
+        (sum(risk_score_sum)::float / nullif(sum(risk_samples), 0))::float as "avgRiskScore",
         jsonb_agg(distinct reason.value) filter (where reason.value is not null) as reasons
-      from traffic_events
-      left join lateral jsonb_array_elements_text(traffic_events.reasons) as reason(value) on true
-      where occurred_at >= now() - (${hours}::text || ' hours')::interval
+      from traffic_subject_windows
+      left join lateral jsonb_array_elements_text(traffic_subject_windows.reasons) as reason(value) on true
+      where window_start >= date_trunc('hour', now() - (${hours}::text || ' hours')::interval)
       group by subject_key
-      having max(risk_score) >= 35 or count(*) >= 80 or count(*) filter (where event_type = 'comic_search') >= 20
-      order by max(risk_score) desc, count(*) desc
+      having max(max_risk_score) >= 35
+        or sum(total_events) >= 80
+        or sum(search_events) >= 20
+        or sum(unique_path_hits) >= 40
+        or sum(unique_search_hits) >= 15
+      order by max(max_risk_score) desc, sum(total_events) desc
       limit ${limit}
     `);
 
@@ -225,6 +274,8 @@ export class TrafficEventsService {
     let repeatedSearches = 0;
     let minuteContentViews = 0;
     let repeatedPathHits = 0;
+    let uniquePaths10m = 0;
+    let uniqueSearches10m = 0;
     let riskScore = 0;
     const reasons: string[] = [];
 
@@ -237,6 +288,12 @@ export class TrafficEventsService {
         repeatedSearches = await this.incrementCounter(
           `traffic:${keySubject}:search:${hashTrafficSubject(input.searchQuery.toLowerCase())}:10m`,
           10 * 60 * 1000,
+        );
+        uniqueSearches10m = await this.trackUniqueValue(
+          `traffic:${keySubject}:unique-searches:10m`,
+          input.searchQuery.toLowerCase(),
+          10 * 60 * 1000,
+          true,
         );
       }
     }
@@ -252,6 +309,12 @@ export class TrafficEventsService {
       repeatedPathHits = await this.incrementCounter(
         `traffic:${keySubject}:path:${hashTrafficSubject(input.path)}:5m`,
         5 * 60 * 1000,
+      );
+      uniquePaths10m = await this.trackUniqueValue(
+        `traffic:${keySubject}:unique-paths:10m`,
+        input.path,
+        10 * 60 * 1000,
+        true,
       );
     }
 
@@ -289,12 +352,30 @@ export class TrafficEventsService {
       reasons.push('repeated_same_path_5m');
     }
 
+    if (uniquePaths10m > 60) {
+      riskScore += 35;
+      reasons.push('high_unique_path_crawl_10m');
+    } else if (uniquePaths10m > 30) {
+      riskScore += 20;
+      reasons.push('elevated_unique_path_crawl_10m');
+    }
+
+    if (uniqueSearches10m > 30) {
+      riskScore += 35;
+      reasons.push('high_unique_search_burst_10m');
+    } else if (uniqueSearches10m > 15) {
+      riskScore += 20;
+      reasons.push('elevated_unique_search_burst_10m');
+    }
+
     return {
       minuteEvents,
       minuteSearches,
       minuteContentViews,
       repeatedSearches,
       repeatedPathHits,
+      uniquePaths10m,
+      uniqueSearches10m,
       riskScore,
       reasons,
     };
@@ -321,7 +402,183 @@ export class TrafficEventsService {
     return current;
   }
 
-  private async persistEvent(values: typeof trafficEvents.$inferInsert) {
+  private async trackUniqueValue(
+    key: string,
+    value: string | null | undefined,
+    ttlMs: number,
+    returnCardinality = false,
+  ): Promise<number> {
+    if (!value) {
+      return 0;
+    }
+
+    const store = (this.cacheService as any).cacheManager?.store;
+    const client = store?.client;
+    if (!client) {
+      return returnCardinality ? 0 : 1;
+    }
+
+    try {
+      const added = Number(await client.sadd(key, value)) || 0;
+      if (added) {
+        await client.pexpire(key, ttlMs);
+      }
+
+      if (returnCardinality) {
+        return Number(await client.scard(key)) || 0;
+      }
+
+      return added > 0 ? 1 : 0;
+    } catch {
+      return returnCardinality ? 0 : 1;
+    }
+  }
+
+  private getWindowStart(date = new Date()): Date {
+    return new Date(Math.floor(date.getTime() / HOUR_MS) * HOUR_MS);
+  }
+
+  private readIntConfig(name: string, fallback: number): number {
+    const parsed = Number.parseInt(this.configService.get<string>(name) || '', 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  private readFloatConfig(name: string, fallback: number): number {
+    const parsed = Number.parseFloat(this.configService.get<string>(name) || '');
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  private async shouldPersistRawEvent(values: TrafficEventPersistencePayload): Promise<boolean> {
+    if (this.configService.get<string>('TRAFFIC_EVENTS_PERSIST_ENABLED') === 'false') {
+      return false;
+    }
+
+    const minRisk = this.readIntConfig(
+      'TRAFFIC_RAW_MIN_RISK_SCORE',
+      DEFAULT_RAW_MIN_RISK_SCORE,
+    );
+    const throttleMs = this.readIntConfig('TRAFFIC_RAW_THROTTLE_MS', 30 * 1000);
+    const riskScore = Number(values.riskScore || 0);
+    const isImportant =
+      riskScore >= minRisk || values.action !== 'allow';
+
+    if (!isImportant) {
+      const sampleRate = Math.min(
+        Math.max(
+          this.readFloatConfig('TRAFFIC_RAW_SAMPLE_RATE', DEFAULT_RAW_SAMPLE_RATE),
+          0,
+        ),
+        1,
+      );
+      if (sampleRate <= 0 || Math.random() > sampleRate) {
+        return false;
+      }
+    }
+
+    const riskBand = riskScore >= 70 ? 'high' : riskScore >= 35 ? 'medium' : 'low';
+    const throttleKey = [
+      'traffic:raw',
+      values.subjectKey,
+      values.eventType,
+      values.action,
+      riskBand,
+    ].join(':');
+
+    return (await this.incrementCounter(throttleKey, throttleMs)) === 1;
+  }
+
+  private async persistAggregate(values: TrafficAggregatePayload) {
+    if (this.configService.get<string>('TRAFFIC_EVENTS_PERSIST_ENABLED') === 'false') {
+      return;
+    }
+
+    const windowStart = this.getWindowStart(values.occurredAt || new Date());
+    const isSearch = values.eventType === 'comic_search' ? 1 : 0;
+    const isContent = ['comic_view', 'chapter_view', 'chapter_pages'].includes(values.eventType) ? 1 : 0;
+    const isLookup = ['comic_lookup', 'chapter_lookup'].includes(values.eventType) ? 1 : 0;
+
+    try {
+      await this.db.execute(sql`
+        insert into traffic_subject_windows (
+          subject_key,
+          window_start,
+          client_ip,
+          client_asn,
+          user_agent,
+          user_id,
+          last_path,
+          last_search_query,
+          total_events,
+          search_events,
+          content_events,
+          lookup_events,
+          unique_path_hits,
+          unique_search_hits,
+          max_risk_score,
+          risk_score_sum,
+          risk_samples,
+          reasons,
+          first_seen_at,
+          last_seen_at,
+          metadata
+        )
+        values (
+          ${values.subjectKey},
+          ${windowStart},
+          ${values.clientIp || null},
+          ${values.clientAsn || null},
+          ${values.userAgent || null},
+          ${values.userId || null},
+          ${values.path || null},
+          ${values.searchQuery || null},
+          1,
+          ${isSearch},
+          ${isContent},
+          ${isLookup},
+          ${values.uniquePathHit},
+          ${values.uniqueSearchHit},
+          ${values.riskScore},
+          ${values.riskScore},
+          1,
+          ${JSON.stringify(values.reasons || [])}::jsonb,
+          coalesce(${values.occurredAt || null}, now()),
+          coalesce(${values.occurredAt || null}, now()),
+          ${JSON.stringify({
+            lastEventType: values.eventType,
+            lastAction: values.action,
+            lastEntityType: values.entityType,
+            lastEntityId: values.entityId,
+          })}::jsonb
+        )
+        on conflict (subject_key, window_start) do update set
+          client_ip = coalesce(excluded.client_ip, traffic_subject_windows.client_ip),
+          client_asn = coalesce(excluded.client_asn, traffic_subject_windows.client_asn),
+          user_agent = coalesce(excluded.user_agent, traffic_subject_windows.user_agent),
+          user_id = coalesce(excluded.user_id, traffic_subject_windows.user_id),
+          last_path = coalesce(excluded.last_path, traffic_subject_windows.last_path),
+          last_search_query = coalesce(excluded.last_search_query, traffic_subject_windows.last_search_query),
+          total_events = traffic_subject_windows.total_events + excluded.total_events,
+          search_events = traffic_subject_windows.search_events + excluded.search_events,
+          content_events = traffic_subject_windows.content_events + excluded.content_events,
+          lookup_events = traffic_subject_windows.lookup_events + excluded.lookup_events,
+          unique_path_hits = traffic_subject_windows.unique_path_hits + excluded.unique_path_hits,
+          unique_search_hits = traffic_subject_windows.unique_search_hits + excluded.unique_search_hits,
+          max_risk_score = greatest(traffic_subject_windows.max_risk_score, excluded.max_risk_score),
+          risk_score_sum = traffic_subject_windows.risk_score_sum + excluded.risk_score_sum,
+          risk_samples = traffic_subject_windows.risk_samples + excluded.risk_samples,
+          reasons = (
+            select coalesce(jsonb_agg(distinct value), '[]'::jsonb)
+            from jsonb_array_elements_text(traffic_subject_windows.reasons || excluded.reasons) as reason(value)
+          ),
+          last_seen_at = greatest(traffic_subject_windows.last_seen_at, excluded.last_seen_at),
+          metadata = traffic_subject_windows.metadata || excluded.metadata
+      `);
+    } catch (error) {
+      this.handleTrafficStorageError(error, 'traffic_subject_windows table is missing; run the 0013 traffic rollups migration.');
+    }
+  }
+
+  private async persistEvent(values: TrafficEventPersistencePayload) {
     if (this.configService.get<string>('TRAFFIC_EVENTS_PERSIST_ENABLED') === 'false') {
       return;
     }
@@ -329,17 +586,60 @@ export class TrafficEventsService {
     try {
       await this.db.insert(trafficEvents).values(values);
     } catch (error) {
-      const code = (error as { code?: string })?.code;
-      if (code === '42P01' || code === '42703') {
-        if (!this.tableMissingLogged) {
-          this.tableMissingLogged = true;
-          console.warn(
-            'traffic_events table is missing; run the 0012_traffic_events migration to persist bot learning events.',
-          );
-        }
-        return;
+      this.handleTrafficStorageError(
+        error,
+        'traffic_events table is missing; run the 0012 traffic events migration.',
+      );
+    }
+  }
+
+  private handleTrafficStorageError(error: unknown, missingMessage: string) {
+    const code = (error as { code?: string })?.code;
+    if (code === '42P01' || code === '42703') {
+      if (!this.tableMissingLogged) {
+        this.tableMissingLogged = true;
+        console.warn(missingMessage);
       }
-      console.error('Failed to persist traffic event:', error);
+      return;
+    }
+    console.error('Failed to persist traffic data:', error);
+  }
+
+  @Interval(CLEANUP_INTERVAL_MS)
+  async cleanupOldTrafficData() {
+    if (this.configService.get<string>('TRAFFIC_EVENTS_PERSIST_ENABLED') === 'false') {
+      return;
+    }
+
+    const lockKey = 'traffic:cleanup:lock';
+    if ((await this.incrementCounter(lockKey, CLEANUP_INTERVAL_MS)) !== 1) {
+      return;
+    }
+
+    const rawRetentionDays = Math.max(
+      this.readIntConfig('TRAFFIC_RAW_RETENTION_DAYS', DEFAULT_RAW_RETENTION_DAYS),
+      1,
+    );
+    const aggregateRetentionDays = Math.max(
+      this.readIntConfig(
+        'TRAFFIC_AGGREGATE_RETENTION_DAYS',
+        DEFAULT_AGGREGATE_RETENTION_DAYS,
+      ),
+      rawRetentionDays,
+    );
+
+    try {
+      await this.db.execute(sql`
+        delete from traffic_events
+        where occurred_at < now() - (${rawRetentionDays}::text || ' days')::interval
+           or (risk_score < 35 and occurred_at < now() - interval '6 hours')
+      `);
+      await this.db.execute(sql`
+        delete from traffic_subject_windows
+        where window_start < date_trunc('hour', now() - (${aggregateRetentionDays}::text || ' days')::interval)
+      `);
+    } catch (error) {
+      this.handleTrafficStorageError(error, 'traffic storage tables are missing; run traffic migrations.');
     }
   }
 

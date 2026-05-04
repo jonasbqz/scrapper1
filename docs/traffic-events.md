@@ -1,10 +1,23 @@
 # Traffic Events / Bot Learning
 
-Objetivo: aprender patrones de bots o tráfico de datacenter sin bloquear buscadores legítimos.
+Objetivo: aprender patrones de bots o tráfico de datacenter sin bloquear buscadores legítimos y sin hacer crecer la base de datos de forma explosiva.
 
-## Qué registra
+## Modelo actual
 
-La API persiste eventos en `traffic_events` para:
+La fuente principal de detección es `traffic_subject_windows`: una tabla agregada por sujeto + hora.
+
+`traffic_events` ya no debe guardar cada request. Ahora solo guarda evidencia cruda:
+
+- eventos con riesgo >= `TRAFFIC_RAW_MIN_RISK_SCORE`;
+- acciones no `allow`;
+- una muestra mínima de tráfico bajo riesgo (`TRAFFIC_RAW_SAMPLE_RATE`);
+- todo con throttle por sujeto/tipo/riesgo (`TRAFFIC_RAW_THROTTLE_MS`).
+
+Esto reduce crecimiento de filas y permite detectar patrones reales con contadores agregados.
+
+## Qué observa
+
+La API procesa señales para:
 
 - `comic_search`: búsquedas en `/api/comics?search=...`
 - `comic_list`: listados sin búsqueda
@@ -14,7 +27,17 @@ La API persiste eventos en `traffic_events` para:
 - `chapter_view`: vista de capítulo
 - `chapter_pages`: solicitud de páginas de capítulo
 
-Cada evento guarda IP normalizada, user-agent, ruta, usuario autenticado si llega por header interno, score de riesgo y razones.
+Señales de patrón:
+
+- requests por minuto;
+- búsquedas por minuto;
+- vistas de contenido por minuto;
+- misma búsqueda repetida;
+- misma ruta repetida;
+- muchas rutas únicas en 10 minutos;
+- muchas búsquedas únicas en 10 minutos;
+- ASN/IP watchlist, por ejemplo Contabo AS51167;
+- user-agent tipo bot/script.
 
 ## Configuración
 
@@ -22,6 +45,11 @@ Cada evento guarda IP normalizada, user-agent, ruta, usuario autenticado si lleg
 - `TRAFFIC_EVENTS_PERSIST_ENABLED=false`: calcula señales/counters pero no escribe en DB.
 - `BOT_WATCH_ASNS=51167`: ASNs a vigilar. `51167` es Contabo. También acepta `AS51167`.
 - `BOT_WATCH_IP_CIDRS=1.2.3.0/24,5.6.7.8`: rangos IP a vigilar, por ejemplo rangos Contabo que se detecten en logs.
+- `TRAFFIC_RAW_MIN_RISK_SCORE=35`: solo persistir raw events desde este riesgo.
+- `TRAFFIC_RAW_SAMPLE_RATE=0.002`: muestra de tráfico bajo riesgo. `0` desactiva muestras.
+- `TRAFFIC_RAW_THROTTLE_MS=30000`: mínimo entre raw rows del mismo sujeto/tipo/riesgo.
+- `TRAFFIC_RAW_RETENTION_DAYS=2`: retención de evidencia cruda.
+- `TRAFFIC_AGGREGATE_RETENTION_DAYS=30`: retención de rollups por hora.
 - También se aceptan alias: `SUSPICIOUS_IP_CIDRS`, `BOT_DATACENTER_IP_CIDRS`, `SUSPICIOUS_ASNS` o `BOT_DATACENTER_ASNS`.
 
 ## Configuración CDN recomendada
@@ -36,18 +64,31 @@ Con eso, `BOT_WATCH_ASNS=51167` marcará tráfico de Contabo como `watchlisted_d
 
 ## Migración
 
-La migración `0012_traffic_events.sql` fue añadida como SQL manual.
-Como el proyecto tiene migraciones manuales fuera del journal de Drizzle,
-no dependas de que `bun drizzle-kit migrate` la descubra automáticamente.
-
-Aplicar en producción con tu gestor SQL o con `psql`:
+Aplicar ambas migraciones manuales:
 
 ```bash
 psql "$DATABASE_URL" -f src/database/migrations/0012_traffic_events.sql
+psql "$DATABASE_URL" -f src/database/migrations/0013_traffic_rollups.sql
 ```
 
-Si tu pipeline ya aplica todos los `.sql` nuevos de `src/database/migrations`,
-solo asegúrate de que incluya `0012_traffic_events.sql`.
+Si no tienes `psql`, puedes aplicar los SQL con `pg`/Bun igual que se hizo localmente.
+
+## Limpieza de datos anteriores
+
+El servicio borra automáticamente:
+
+- raw events de bajo riesgo mayores a 6 horas;
+- raw events mayores a `TRAFFIC_RAW_RETENTION_DAYS`;
+- rollups mayores a `TRAFFIC_AGGREGATE_RETENTION_DAYS`.
+
+Para una limpieza inmediata de datos crudos viejos, ejecutar manualmente con cuidado:
+
+```sql
+DELETE FROM traffic_events
+WHERE occurred_at < now() - interval '2 days'
+   OR (risk_score < 35 AND occurred_at < now() - interval '6 hours');
+VACUUM (ANALYZE) traffic_events;
+```
 
 ## Consultas admin
 
@@ -57,6 +98,8 @@ Requieren sesión admin o `x-admin-api-key`.
 GET /api/traffic-events/recent?minRisk=35&limit=100
 GET /api/traffic-events/suspicious?hours=24&limit=100
 ```
+
+`/suspicious` usa `traffic_subject_windows`, no la tabla raw.
 
 ## Importante
 
