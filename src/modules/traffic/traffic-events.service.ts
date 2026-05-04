@@ -130,15 +130,6 @@ export class TrafficEventsService {
       };
     }
 
-    if (await this.isManuallyUnblockedSubject(subjectKey)) {
-      return {
-        action: 'allow' as TrafficAction,
-        blocked: false,
-        riskScore: 0,
-        reasons: ['manually_unblocked'],
-      };
-    }
-
     const staticInspection = inspectTrafficEvent({
       eventType: input.eventType,
       clientIp,
@@ -168,12 +159,16 @@ export class TrafficEventsService {
     const reasons = Array.from(
       new Set([...staticInspection.reasons, ...counters.reasons]),
     );
-    const shouldBlock = this.shouldBlockRequest({
+    let shouldBlock = this.shouldBlockRequest({
       action: input.action,
       counters,
       staticInspection,
       riskScore,
     });
+    if (shouldBlock && await this.isManuallyUnblockedSubject(subjectKey)) {
+      shouldBlock = false;
+      reasons.push('manually_unblocked');
+    }
     const action = shouldBlock
       ? 'rate_limited'
       : input.action || actionFromRiskScore(riskScore);
