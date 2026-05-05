@@ -1,14 +1,15 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import { CacheService } from '@/cache/cache.service';
+import { isAllowedSearchCrawlerUserAgent } from '@/modules/traffic/bot-detection.util';
 import { getRequestClientIp } from '@/common/network/client-ip';
 import {
   containsBlockedSearchScript,
   normalizeSearchQuery,
 } from './search-abuse.util';
 
-const SEARCH_WINDOW_MS = 60 * 1000;
-const SEARCH_WINDOW_LIMIT = 45;
+const SEARCH_WINDOW_MS = 30 * 1000;
+const SEARCH_WINDOW_LIMIT = 10;
 const BLOCKED_SCRIPT_WINDOW_MS = 5 * 60 * 1000;
 const BLOCKED_SCRIPT_WINDOW_LIMIT = 3;
 const NO_IP_WINDOW_LIMIT = 5;
@@ -27,6 +28,10 @@ export class SearchAbuseService {
     request: FastifyRequest,
   ): Promise<SearchInspectionResult> {
     const normalizedSearch = normalizeSearchQuery(search);
+
+    if (isAllowedSearchCrawlerUserAgent(this.readHeader(request, 'user-agent'))) {
+      return { action: 'allow', search: normalizedSearch };
+    }
 
     if (!normalizedSearch) {
       return { action: 'allow', search: '' };
@@ -66,6 +71,14 @@ export class SearchAbuseService {
       'Demasiadas búsquedas en muy poco tiempo. Intenta de nuevo en un momento.',
       HttpStatus.TOO_MANY_REQUESTS,
     );
+  }
+
+  private readHeader(request: FastifyRequest, name: string): string | null {
+    const value = request.headers[name.toLowerCase()];
+    if (Array.isArray(value)) {
+      return value[0] || null;
+    }
+    return typeof value === 'string' ? value : null;
   }
 
   private async incrementCounter(key: string, ttlMs: number): Promise<number> {

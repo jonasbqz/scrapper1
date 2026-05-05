@@ -36,8 +36,8 @@ export type TrafficInspectionResult = {
   reasons: string[];
 };
 
-const ALLOWED_SEARCH_CRAWLER_UA_REGEX =
-  /\b(Googlebot|Google-InspectionTool|AdsBot-Google|Mediapartners-Google|bingbot|BingPreview|DuckDuckBot|Applebot|YandexBot|Baiduspider|Slurp)\b/i;
+export const ALLOWED_SEARCH_CRAWLER_UA_REGEX =
+  /\b(Googlebot|Googlebot-Image|Googlebot-Video|Google-InspectionTool|AdsBot-Google|AdsBot-Google-Mobile|Mediapartners-Google|Storebot-Google|GoogleOther|GoogleOther-Image|GoogleOther-Video|bingbot|BingPreview|DuckDuckBot|Applebot|YandexBot|Baiduspider|Slurp)\b/i;
 
 const BOT_LIKE_UA_REGEX =
   /\b(bot|crawler|spider|scraper|scrapy|crawl|httpclient|python-requests|python-urllib|aiohttp|curl|wget|go-http-client|java\/|okhttp|axios|headlesschrome|phantomjs|selenium|playwright|puppeteer)\b/i;
@@ -128,6 +128,10 @@ export function parseAsnList(value?: string | null): number[] {
   );
 }
 
+export function isAllowedSearchCrawlerUserAgent(userAgent?: string | null): boolean {
+  return ALLOWED_SEARCH_CRAWLER_UA_REGEX.test((userAgent || '').trim());
+}
+
 export function hashTrafficSubject(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -137,7 +141,7 @@ export function inspectTrafficEvent(input: TrafficInspectionInput): TrafficInspe
   const reasons: string[] = [];
   let riskScore = 0;
 
-  const isAllowedSearchCrawler = ALLOWED_SEARCH_CRAWLER_UA_REGEX.test(userAgent);
+  const isAllowedSearchCrawler = isAllowedSearchCrawlerUserAgent(userAgent);
   const isBotLike = BOT_LIKE_UA_REGEX.test(userAgent);
   const isAllowedNetwork = Boolean(
     (input.clientIp &&

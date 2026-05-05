@@ -34,6 +34,7 @@ type RecordTrafficInput = {
 
 type CounterSignals = {
   thirtySecondEvents: number;
+  thirtySecondSearches: number;
   minuteEvents: number;
   minuteSearches: number;
   minuteContentViews: number;
@@ -63,6 +64,7 @@ const DEFAULT_RAW_RETENTION_DAYS = 2;
 const DEFAULT_AGGREGATE_RETENTION_DAYS = 30;
 const DEFAULT_BLOCK_TTL_HOURS = 24;
 const DEFAULT_MAX_REQUESTS_PER_30S = 200;
+const DEFAULT_MAX_SEARCHES_PER_30S = 10;
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 @Injectable()
@@ -290,14 +292,23 @@ export class TrafficEventsService {
       'BOT_MAX_REQUESTS_PER_30S',
       DEFAULT_MAX_REQUESTS_PER_30S,
     );
+    const maxSearchesPer30s = this.readIntConfig(
+      'BOT_MAX_SEARCHES_PER_30S',
+      DEFAULT_MAX_SEARCHES_PER_30S,
+    );
 
     // Do not block from static heuristics (datacenter ASN/IP, bot-like UA, risk score,
     // unique paths, searches, etc.). Those signals are useful for observability, but they
     // caused false 404s for normal users. The only automatic block is a clear burst: more
-    // than BOT_MAX_REQUESTS_PER_30S requests from the same client IP in 30 seconds.
-    // Default is intentionally high because normal page loads can fan out into many API
-    // calls, image requests, and client-side refreshes.
-    return input.counters.thirtySecondEvents > maxRequestsPer30s;
+    // than BOT_MAX_REQUESTS_PER_30S total requests, or more than
+    // BOT_MAX_SEARCHES_PER_30S search requests, from the same client IP in 30 seconds.
+    // Total request default is intentionally high because normal page loads can fan out
+    // into many API calls, image requests, and client-side refreshes. Search default is
+    // stricter because more than 10 searches in 30s is not normal human behavior.
+    return (
+      input.counters.thirtySecondEvents > maxRequestsPer30s ||
+      input.counters.thirtySecondSearches > maxSearchesPer30s
+    );
   }
 
   private isAllowedInfrastructure(
@@ -498,6 +509,7 @@ export class TrafficEventsService {
       60 * 1000,
     );
 
+    let thirtySecondSearches = 0;
     let minuteSearches = 0;
     let repeatedSearches = 0;
     let minuteContentViews = 0;
@@ -508,6 +520,10 @@ export class TrafficEventsService {
     const reasons: string[] = [];
 
     if (input.eventType === 'comic_search') {
+      thirtySecondSearches = await this.incrementCounter(
+        `traffic:${keySubject}:searches:30s`,
+        30 * 1000,
+      );
       minuteSearches = await this.incrementCounter(
         `traffic:${keySubject}:searches:1m`,
         60 * 1000,
@@ -550,9 +566,17 @@ export class TrafficEventsService {
       'BOT_MAX_REQUESTS_PER_30S',
       DEFAULT_MAX_REQUESTS_PER_30S,
     );
+    const maxSearchesPer30s = this.readIntConfig(
+      'BOT_MAX_SEARCHES_PER_30S',
+      DEFAULT_MAX_SEARCHES_PER_30S,
+    );
     if (thirtySecondEvents > maxRequestsPer30s) {
       riskScore += 50;
       reasons.push('too_many_requests_30s');
+    }
+    if (thirtySecondSearches > maxSearchesPer30s) {
+      riskScore += 50;
+      reasons.push('too_many_searches_30s');
     }
 
     if (minuteEvents > 120) {
@@ -607,6 +631,7 @@ export class TrafficEventsService {
 
     return {
       thirtySecondEvents,
+      thirtySecondSearches,
       minuteEvents,
       minuteSearches,
       minuteContentViews,
@@ -748,7 +773,10 @@ export class TrafficEventsService {
 
     // Ignore stale blocks created by the old aggressive heuristics so normal users are not
     // kept behind fake 404s after deploy. New automatic blocks carry this reason.
-    return activeBlock.reasons.includes('too_many_requests_30s');
+    return (
+      activeBlock.reasons.includes('too_many_requests_30s') ||
+      activeBlock.reasons.includes('too_many_searches_30s')
+    );
   }
 
   private getBlockTtlHours(): number {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   actionFromRiskScore,
   inspectTrafficEvent,
+  isAllowedSearchCrawlerUserAgent,
   isInternalIp,
   isIpv4InCidr,
   parseAsnList,
@@ -20,6 +21,12 @@ describe('bot detection util', () => {
     expect(result.isAllowedSearchCrawler).toBe(true);
     expect(result.reasons).toContain('allowed_search_crawler_user_agent');
     expect(result.riskScore).toBeLessThan(20);
+  });
+
+  it('recognizes current Google common crawler user agents', () => {
+    expect(isAllowedSearchCrawlerUserAgent('Googlebot-Image/1.0')).toBe(true);
+    expect(isAllowedSearchCrawlerUserAgent('Mozilla/5.0 (compatible; GoogleOther)')).toBe(true);
+    expect(isAllowedSearchCrawlerUserAgent('Mozilla/5.0 (X11; Linux x86_64; Storebot-Google/1.0)')).toBe(true);
   });
 
   it('flags generic bot user agents', () => {
