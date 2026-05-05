@@ -78,6 +78,23 @@ describe('bot detection util', () => {
     expect(result.reasons).toContain('allowed_network');
   });
 
+  it('does not mark allowed ASNs as watchlisted datacenters', () => {
+    const result = inspectTrafficEvent({
+      eventType: 'comic_view',
+      userAgent: 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+      clientIp: '66.249.64.97',
+      clientAsn: 15169,
+      watchAsns: [15169],
+      allowAsns: [15169],
+    });
+
+    expect(result.isAllowedSearchCrawler).toBe(true);
+    expect(result.isAllowedNetwork).toBe(true);
+    expect(result.isWatchlistedDatacenter).toBe(false);
+    expect(result.reasons).toContain('allowed_network');
+    expect(result.reasons).not.toContain('watchlisted_datacenter_asn');
+  });
+
   it('matches IPv4 CIDR ranges', () => {
     expect(isIpv4InCidr('192.0.2.55', '192.0.2.0/24')).toBe(true);
     expect(isIpv4InCidr('192.0.3.55', '192.0.2.0/24')).toBe(false);

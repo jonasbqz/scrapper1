@@ -161,12 +161,13 @@ export function inspectTrafficEvent(input: TrafficInspectionInput): TrafficInspe
     reasons.push('bot_like_user_agent');
   }
 
-  if (isIpInAnyCidr(input.clientIp, input.watchCidrs)) {
+  if (!isAllowedNetwork && isIpInAnyCidr(input.clientIp, input.watchCidrs)) {
     riskScore += 35;
     reasons.push('watchlisted_datacenter_ip');
   }
 
   if (
+    !isAllowedNetwork &&
     input.clientAsn &&
     Array.isArray(input.watchAsns) &&
     input.watchAsns.includes(input.clientAsn)
