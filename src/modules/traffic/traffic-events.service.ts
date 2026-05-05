@@ -60,6 +60,7 @@ const DEFAULT_RAW_MIN_RISK_SCORE = 35;
 const DEFAULT_RAW_SAMPLE_RATE = 0.002; // 0.2% of low-risk traffic, enough for debugging without DB explosion.
 const DEFAULT_RAW_RETENTION_DAYS = 2;
 const DEFAULT_AGGREGATE_RETENTION_DAYS = 30;
+const DEFAULT_BLOCK_TTL_HOURS = 24;
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 @Injectable()
@@ -127,6 +128,26 @@ export class TrafficEventsService {
         blocked: false,
         riskScore: 0,
         reasons: ['allowed_network'],
+      };
+    }
+
+    const activeBlock = await this.getActiveBlockedSubject(subjectKey);
+    if (activeBlock) {
+      await this.touchBlockedSubject(subjectKey, {
+        clientIp,
+        clientAsn,
+        userAgent,
+        path,
+        eventType: input.eventType,
+        entityType: input.entityType || null,
+        entityId: input.entityId || null,
+      });
+
+      return {
+        action: 'rate_limited' as TrafficAction,
+        blocked: true,
+        riskScore: activeBlock.riskScore || 100,
+        reasons: ['temporary_bot_block', ...(activeBlock.reasons || [])],
       };
     }
 
@@ -400,6 +421,7 @@ export class TrafficEventsService {
           risk_score as "riskScore",
           first_blocked_at as "firstBlockedAt",
           last_blocked_at as "lastBlockedAt",
+          blocked_until as "blockedUntil",
           blocked_count as "blockedCount",
           unblocked_at as "unblockedAt",
           unblocked_by as "unblockedBy",
@@ -429,6 +451,7 @@ export class TrafficEventsService {
         update traffic_blocked_subjects
         set
           status = 'unblocked',
+          blocked_until = null,
           unblocked_at = now(),
           unblocked_by = ${input.actorId || null},
           unblock_reason = ${input.reason || null}
@@ -444,6 +467,7 @@ export class TrafficEventsService {
           risk_score as "riskScore",
           first_blocked_at as "firstBlockedAt",
           last_blocked_at as "lastBlockedAt",
+          blocked_until as "blockedUntil",
           blocked_count as "blockedCount",
           unblocked_at as "unblockedAt",
           unblocked_by as "unblockedBy",
@@ -710,6 +734,85 @@ export class TrafficEventsService {
     }
   }
 
+  private getBlockTtlHours(): number {
+    return Math.max(
+      this.readIntConfig('BOT_BLOCK_TTL_HOURS', DEFAULT_BLOCK_TTL_HOURS),
+      1,
+    );
+  }
+
+  private async getActiveBlockedSubject(subjectKey: string): Promise<{
+    riskScore: number;
+    reasons: string[];
+  } | null> {
+    try {
+      const result = await this.db.execute(sql`
+        select
+          risk_score as "riskScore",
+          reasons
+        from traffic_blocked_subjects
+        where subject_key = ${subjectKey}
+          and status = 'active'
+          and blocked_until > now()
+        limit 1
+      `);
+      const [row] = this.rows(result) as Array<{
+        riskScore?: number;
+        reasons?: string[];
+      }>;
+
+      if (!row) {
+        return null;
+      }
+
+      return {
+        riskScore: Number(row.riskScore || 100),
+        reasons: Array.isArray(row.reasons) ? row.reasons : [],
+      };
+    } catch (error) {
+      this.handleTrafficStorageError(error, 'traffic_blocked_subjects table is missing; run the 0015 block TTL migration.');
+      return null;
+    }
+  }
+
+  private async touchBlockedSubject(
+    subjectKey: string,
+    values: {
+      clientIp: string | null;
+      clientAsn: number | null;
+      userAgent: string | null;
+      path: string | null;
+      eventType: TrafficEventType;
+      entityType?: string | null;
+      entityId?: number | null;
+    },
+  ) {
+    try {
+      await this.db.execute(sql`
+        update traffic_blocked_subjects
+        set
+          client_ip = coalesce(${values.clientIp || null}, client_ip),
+          client_asn = coalesce(${values.clientAsn || null}, client_asn),
+          user_agent = coalesce(${values.userAgent || null}, user_agent),
+          last_blocked_at = now(),
+          blocked_count = blocked_count + 1,
+          metadata = metadata || ${JSON.stringify({
+            lastEventType: values.eventType,
+            lastAction: 'rate_limited',
+            lastPath: values.path,
+            lastEntityType: values.entityType || null,
+            lastEntityId: values.entityId || null,
+            lastBlockedBy: 'temporary_bot_block',
+          })}::jsonb
+        where subject_key = ${subjectKey}
+          and status = 'active'
+          and blocked_until > now()
+      `);
+    } catch (error) {
+      this.handleTrafficStorageError(error, 'traffic_blocked_subjects table is missing; run the 0015 block TTL migration.');
+    }
+  }
+
   private async persistBlockedSubject(values: TrafficEventPersistencePayload) {
     if (this.configService.get<string>('TRAFFIC_EVENTS_PERSIST_ENABLED') === 'false') {
       return;
@@ -720,6 +823,7 @@ export class TrafficEventsService {
       values.reasons?.find((reason) => reason.includes('rate')) ||
       values.reasons?.[0] ||
       'blocked_by_bot_detector';
+    const ttlHours = this.getBlockTtlHours();
 
     try {
       await this.db.execute(sql`
@@ -734,6 +838,7 @@ export class TrafficEventsService {
           risk_score,
           first_blocked_at,
           last_blocked_at,
+          blocked_until,
           blocked_count,
           metadata
         )
@@ -748,6 +853,7 @@ export class TrafficEventsService {
           ${values.riskScore || 0},
           coalesce(${values.occurredAt || null}, now()),
           coalesce(${values.occurredAt || null}, now()),
+          now() + (${ttlHours}::text || ' hours')::interval,
           1,
           ${JSON.stringify({
             lastEventType: values.eventType,
@@ -770,6 +876,7 @@ export class TrafficEventsService {
           ),
           risk_score = greatest(traffic_blocked_subjects.risk_score, excluded.risk_score),
           last_blocked_at = greatest(traffic_blocked_subjects.last_blocked_at, excluded.last_blocked_at),
+          blocked_until = excluded.blocked_until,
           blocked_count = traffic_blocked_subjects.blocked_count + 1,
           metadata = traffic_blocked_subjects.metadata || excluded.metadata
         where traffic_blocked_subjects.status <> 'unblocked'
@@ -929,6 +1036,13 @@ export class TrafficEventsService {
       await this.db.execute(sql`
         delete from traffic_subject_windows
         where window_start < date_trunc('hour', now() - (${aggregateRetentionDays}::text || ' days')::interval)
+      `);
+      await this.db.execute(sql`
+        update traffic_blocked_subjects
+        set status = 'expired'
+        where status = 'active'
+          and blocked_until is not null
+          and blocked_until <= now()
       `);
     } catch (error) {
       this.handleTrafficStorageError(error, 'traffic storage tables are missing; run traffic migrations.');
