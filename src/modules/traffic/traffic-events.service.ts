@@ -398,12 +398,14 @@ export class TrafficEventsService {
     return this.rows(rows);
   }
 
-  async getBlockedSubjects(filters: { status?: string; limit?: number }) {
+  async getBlockedSubjects(filters: { status?: string; limit?: number; q?: string }) {
     const requestedStatus = filters.status || 'active';
     const status: BlockedSubjectStatus = ['active', 'unblocked', 'all'].includes(requestedStatus)
       ? requestedStatus as BlockedSubjectStatus
       : 'active';
     const limit = Math.min(Math.max(filters.limit || 100, 1), 500);
+    const search = (filters.q || '').trim();
+    const searchPattern = search ? `%${search}%` : null;
 
     try {
       const rows = await this.db.execute(sql`
@@ -426,6 +428,16 @@ export class TrafficEventsService {
           metadata
         from traffic_blocked_subjects
         where (${status}::text = 'all' or status = ${status})
+          and (
+            ${searchPattern}::text is null
+            or client_ip ilike ${searchPattern}
+            or subject_key ilike ${searchPattern}
+            or coalesce(user_agent, '') ilike ${searchPattern}
+            or coalesce(block_reason, '') ilike ${searchPattern}
+            or status ilike ${searchPattern}
+            or coalesce(client_asn::text, '') ilike ${searchPattern}
+            or reasons::text ilike ${searchPattern}
+          )
         order by
           case when status = 'active' then 0 else 1 end,
           last_blocked_at desc

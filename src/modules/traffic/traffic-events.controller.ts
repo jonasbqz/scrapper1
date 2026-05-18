@@ -47,13 +47,16 @@ export class TrafficEventsController {
   @ApiOperation({ summary: 'Blocked bot subjects with manual unblock status' })
   @ApiQuery({ name: 'status', required: false, enum: ['active', 'unblocked', 'all'] })
   @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'q', required: false, description: 'Search by IPv4/IPv6, subject key, ASN, user-agent, reason, or status' })
   async blocked(
     @Query('status') status?: string,
     @Query('limit') limit?: string,
+    @Query('q') q?: string,
   ) {
     return this.trafficEventsService.getBlockedSubjects({
       status: status || undefined,
       limit: limit ? Number.parseInt(limit, 10) : undefined,
+      q: q || undefined,
     });
   }
 
