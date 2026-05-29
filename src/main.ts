@@ -95,9 +95,9 @@ async function bootstrap() {
   );
 
   // Register cookie plugin for better-auth sessions
-  const cookieSecret = process.env.COOKIE_SECRET;
+  const cookieSecret = process.env.COOKIE_SECRET || process.env.BETTER_AUTH_SECRET;
   if (!cookieSecret && process.env.NODE_ENV === 'production') {
-    throw new Error('[security] COOKIE_SECRET environment variable is required in production');
+    throw new Error('[security] COOKIE_SECRET or BETTER_AUTH_SECRET environment variable is required in production');
   }
   await app.register(fastifyCookie, {
     secret: cookieSecret || crypto.randomUUID(),
