@@ -16,6 +16,7 @@ export type TrafficInspectionInput = {
   clientIp?: string | null;
   clientAsn?: number | null;
   userAgent?: string | null;
+  referer?: string | null;
   path?: string | null;
   searchQuery?: string | null;
   userId?: string | null;
@@ -24,6 +25,8 @@ export type TrafficInspectionInput = {
   allowCidrs?: string[];
   allowIps?: string[];
   allowAsns?: number[];
+  trustedRefererOrigins?: string[];
+  hasInternalAccess?: boolean;
 };
 
 export type TrafficInspectionResult = {
@@ -128,6 +131,21 @@ export function parseAsnList(value?: string | null): number[] {
   );
 }
 
+export function isTrustedRefererOrigin(
+  referer: string | null | undefined,
+  trustedOrigins: string[] = [],
+): boolean {
+  if (!referer?.trim() || trustedOrigins.length === 0) {
+    return false;
+  }
+
+  try {
+    return trustedOrigins.includes(new URL(referer).origin);
+  } catch {
+    return false;
+  }
+}
+
 export function isAllowedSearchCrawlerUserAgent(userAgent?: string | null): boolean {
   return ALLOWED_SEARCH_CRAWLER_UA_REGEX.test((userAgent || '').trim());
 }
@@ -205,6 +223,30 @@ export function inspectTrafficEvent(input: TrafficInspectionInput): TrafficInspe
   if (input.path && /\.(php|env|bak|sql|zip|tar|gz)$/i.test(input.path)) {
     riskScore += 30;
     reasons.push('probe_path_pattern');
+  }
+
+  const contentEvents = new Set<TrafficEventType>([
+    'comic_view',
+    'chapter_view',
+    'chapter_pages',
+    'comic_search',
+    'comic_list',
+  ]);
+
+  if (
+    contentEvents.has(input.eventType) &&
+    !input.hasInternalAccess &&
+    !isAllowedSearchCrawler &&
+    Array.isArray(input.trustedRefererOrigins) &&
+    input.trustedRefererOrigins.length > 0
+  ) {
+    if (!input.referer?.trim()) {
+      riskScore += 20;
+      reasons.push('missing_referer');
+    } else if (!isTrustedRefererOrigin(input.referer, input.trustedRefererOrigins)) {
+      riskScore += 25;
+      reasons.push('untrusted_referer');
+    }
   }
 
   return {

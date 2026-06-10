@@ -215,19 +215,6 @@ export class ComicController {
     return this.comicService.getPopularToday(limit ? parseInt(limit, 10) : 10, isNsfw);
   }
 
-  @Get(['id/:id/recommendations', ':id(\\d+)/recommendations'])
-  @ApiOperation({ summary: 'Get comic recommendations based on genres' })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'nsfw', required: false, type: Boolean, description: 'Filter NSFW content' })
-  async getRecommendations(
-    @Param('id', ParseIntPipe) id: number,
-    @Query('limit') limit?: string,
-    @Query('nsfw') nsfw?: string,
-  ) {
-    const isNsfw = nsfw === 'false' ? false : nsfw === 'true' ? true : undefined;
-    return this.comicService.getRecommendations(id, limit ? parseInt(limit, 10) : 10, isNsfw);
-  }
-
   @Get('lookup/route')
   @ApiOperation({ summary: 'Resolve comic path without incrementing views' })
   async lookupByRouteQuery(
@@ -358,23 +345,6 @@ export class ComicController {
     return comic;
   }
 
-  @Get(['id/:id', ':id(\\d+)'])
-  @ApiOperation({ summary: 'Get comic by ID' })
-  async findById(
-    @Param('id', ParseIntPipe) id: number,
-    @Req() request: FastifyRequest,
-  ) {
-    const comic = await this.comicService.findById(id);
-    await this.routeProtectionService.assertLegacyAccess(comic, request.headers);
-    await this.recordTrafficEvent(request, {
-      eventType: 'comic_view',
-      entityType: 'comic',
-      entityId: id,
-    });
-    await this.comicService.incrementViews(id);
-    return comic;
-  }
-
   @Get('slug/:slug')
   @ApiOperation({ summary: 'Get comic by slug' })
   async findBySlug(
@@ -431,5 +401,35 @@ export class ComicController {
     const pageNum = page ? parseInt(page, 10) : 1;
     const limitNum = Math.min(limit ? parseInt(limit, 10) : 5000, 10000);
     return this.comicService.getSitemapChapters(pageNum, limitNum);
+  }
+
+  @Get(':id/recommendations')
+  @ApiOperation({ summary: 'Get comic recommendations based on genres' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'nsfw', required: false, type: Boolean, description: 'Filter NSFW content' })
+  async getRecommendations(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('limit') limit?: string,
+    @Query('nsfw') nsfw?: string,
+  ) {
+    const isNsfw = nsfw === 'false' ? false : nsfw === 'true' ? true : undefined;
+    return this.comicService.getRecommendations(id, limit ? parseInt(limit, 10) : 10, isNsfw);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Get comic by ID' })
+  async findById(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() request: FastifyRequest,
+  ) {
+    const comic = await this.comicService.findById(id);
+    await this.routeProtectionService.assertLegacyAccess(comic, request.headers);
+    await this.recordTrafficEvent(request, {
+      eventType: 'comic_view',
+      entityType: 'comic',
+      entityId: id,
+    });
+    await this.comicService.incrementViews(id);
+    return comic;
   }
 }

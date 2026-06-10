@@ -31,12 +31,12 @@ export class RouteProtectionService {
   }
 
   hasInternalAccess(headers: HeadersLike): boolean {
-    const secret =
-      this.configService.get<string>('INTERNAL_ROUTE_SECRET') ||
-      this.configService.get<string>('BETTER_AUTH_SECRET') ||
-      '';
+    const secret = this.configService.get<string>('INTERNAL_ROUTE_SECRET')?.trim();
 
     if (!secret) {
+      if (process.env.NODE_ENV === 'production') {
+        return false;
+      }
       return false;
     }
 

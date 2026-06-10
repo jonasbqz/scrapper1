@@ -5,9 +5,10 @@ import { ComicService } from './comic.service';
 import { SearchAbuseService } from './search-abuse.service';
 import { RouteProtectionModule } from '../route-protection/route-protection.module';
 import { TrafficEventsModule } from '../traffic/traffic-events.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [RouteProtectionModule, TrafficEventsModule],
+  imports: [RouteProtectionModule, TrafficEventsModule, AuthModule],
   controllers: [ComicController, ComicScanController],
   providers: [ComicService, SearchAbuseService],
   exports: [ComicService],

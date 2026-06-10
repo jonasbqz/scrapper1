@@ -10,6 +10,7 @@ import {
   isAllowedPersonalEmailDomain,
 } from '@/lib/email-policy';
 import { getSharedPool } from '@/lib/db-pool';
+import { parseCorsOrigins } from '@/lib/cors-origins';
 
 const db = drizzle(getSharedPool(), { schema });
 const authBaseUrl = process.env.BASE_URL || 'http://localhost:8085';
@@ -71,18 +72,18 @@ export const auth = betterAuth({
     },
   },
   trustedOrigins: [
-    ...(process.env.CORS_ORIGIN?.split(',') || [
-      'http://localhost:3000',
-      'https://mangolibreria.com',
-    ]),
+    ...parseCorsOrigins(process.env.CORS_ORIGIN),
     'https://mangolibreria.com',
     'https://www.mangolibreria.com',
+    'http://localhost:3000',
   ],
   advanced: {
+    useSecureCookies: shouldUseSecureCookies,
     defaultCookieAttributes: {
       secure: shouldUseSecureCookies,
       httpOnly: true,
-      sameSite: shouldUseSecureCookies ? 'none' : 'lax',
+      // Browser auth is handled by the Next.js BFF; API sessions use Bearer tokens.
+      sameSite: 'lax',
     },
   },
   plugins: [bearer()],

@@ -2,6 +2,7 @@ import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { FastifyRequest } from 'fastify';
 import { CacheService } from '@/cache/cache.service';
+import { SessionResolverService } from '@/modules/auth/session-resolver';
 import { isAllowedSearchCrawlerUserAgent } from '@/modules/traffic/bot-detection.util';
 import { getRequestClientIp } from '@/common/network/client-ip';
 import {
@@ -38,6 +39,7 @@ export class SearchAbuseService {
   constructor(
     private readonly cacheService: CacheService,
     private readonly configService: ConfigService,
+    private readonly sessionResolver: SessionResolverService,
   ) {}
 
   async inspectSearch(
@@ -59,7 +61,8 @@ export class SearchAbuseService {
     const ipKey = clientIp || 'unknown';
     const page = Math.max(1, options.page || 1);
     const queryHash = hashSearchQueryKey(normalizedSearch);
-    const userId = this.readHeader(request, 'x-user-id');
+    const session = await this.sessionResolver.resolveSession(request.headers);
+    const userId = session?.user.id || null;
     const isAuthenticated = Boolean(userId);
     const isHumanEngaged = await this.hasRecentHumanEngagement(ipKey);
     const limitMultiplier = this.getLimitMultiplier({
@@ -207,8 +210,7 @@ export class SearchAbuseService {
   }
 
   private async incrementCounter(key: string, ttlMs: number): Promise<number> {
-    const store = (this.cacheService as any).cacheManager?.store;
-    const client = store?.client;
+    const client = this.cacheService.getRedisClient();
 
     if (client) {
       try {

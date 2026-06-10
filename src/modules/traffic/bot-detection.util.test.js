@@ -126,4 +126,30 @@ describe('bot detection util', () => {
     expect(actionFromRiskScore(40)).toBe('observe');
     expect(actionFromRiskScore(80)).toBe('suspicious');
   });
+
+  it('flags missing referer on direct API scraping', () => {
+    const result = inspectTrafficEvent({
+      eventType: 'comic_view',
+      userAgent: 'Mozilla/5.0',
+      clientIp: '203.0.113.10',
+      trustedRefererOrigins: ['https://mangolibreria.com'],
+      hasInternalAccess: false,
+    });
+
+    expect(result.reasons).toContain('missing_referer');
+    expect(result.riskScore).toBeGreaterThanOrEqual(20);
+  });
+
+  it('allows BFF traffic with internal access even without referer', () => {
+    const result = inspectTrafficEvent({
+      eventType: 'comic_view',
+      userAgent: 'node',
+      clientIp: '203.0.113.10',
+      trustedRefererOrigins: ['https://mangolibreria.com'],
+      hasInternalAccess: true,
+    });
+
+    expect(result.reasons).not.toContain('missing_referer');
+    expect(result.reasons).not.toContain('untrusted_referer');
+  });
 });

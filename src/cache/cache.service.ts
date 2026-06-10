@@ -45,6 +45,40 @@ export class CacheService {
 
   constructor(@Inject(CACHE_MANAGER) private cacheManager: Cache) {}
 
+  private getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  /**
+   * Returns the underlying Redis-backed store when REDIS_URL is configured.
+   * cache-manager v7 wraps stores in Keyv → KeyvAdapter → legacy store.
+   */
+  getRedisBackedStore(): {
+    keys?: (pattern?: string) => Promise<string[]>;
+    client?: {
+      incr: (key: string) => Promise<number>;
+      pexpire: (key: string, ttlMs: number) => Promise<number>;
+      ttl: (key: string) => Promise<number>;
+      expire: (key: string, seconds: number) => Promise<number>;
+      zincrby: (key: string, increment: number, member: string) => Promise<string>;
+      zrevrange: (key: string, start: number, stop: number) => Promise<string[]>;
+      sadd: (key: string, member: string) => Promise<number>;
+      scard: (key: string) => Promise<number>;
+    };
+  } | null {
+    const keyvAdapter = this.cacheManager.stores?.[0]?.opts?.store as
+      | { _cache?: ReturnType<CacheService['getRedisBackedStore']> }
+      | undefined;
+    const legacyStore = (this.cacheManager as { store?: ReturnType<CacheService['getRedisBackedStore']> })
+      .store;
+
+    return keyvAdapter?._cache ?? legacyStore ?? null;
+  }
+
+  getRedisClient() {
+    return this.getRedisBackedStore()?.client ?? null;
+  }
+
   private shouldLogError(): boolean {
     const now = Date.now();
     if (now - this.lastErrorTime >= this.ERROR_COOLDOWN_MS) {
@@ -62,7 +96,7 @@ export class CacheService {
       return await this.cacheManager.get<T>(key);
     } catch (error) {
       if (this.shouldLogError()) {
-        console.error(`Cache get error (suppressed subsequent errors for 30s):`, error.message);
+        console.error(`Cache get error (suppressed subsequent errors for 30s):`, this.getErrorMessage(error));
       }
       return undefined;
     }
@@ -80,7 +114,7 @@ export class CacheService {
       await this.cacheManager.set(key, value, ttl);
     } catch (error) {
       if (this.shouldLogError()) {
-        console.error(`Cache set error (suppressed subsequent errors for 30s):`, error.message);
+        console.error(`Cache set error (suppressed subsequent errors for 30s):`, this.getErrorMessage(error));
       }
     }
   }
@@ -93,7 +127,7 @@ export class CacheService {
       await this.cacheManager.del(key);
     } catch (error) {
       if (this.shouldLogError()) {
-        console.error(`Cache delete error (suppressed subsequent errors for 30s):`, error.message);
+        console.error(`Cache delete error (suppressed subsequent errors for 30s):`, this.getErrorMessage(error));
       }
     }
   }
@@ -104,8 +138,8 @@ export class CacheService {
    */
   async delByPattern(pattern: string): Promise<void> {
     try {
-      const store = this.cacheManager.store as any;
-      if (store.keys && store.del) {
+      const store = this.getRedisBackedStore();
+      if (store?.keys) {
         const keys = await store.keys(pattern);
         if (keys && keys.length > 0) {
           await Promise.all(
@@ -115,7 +149,7 @@ export class CacheService {
       }
     } catch (error) {
       if (this.shouldLogError()) {
-        console.error(`Cache pattern delete error (suppressed subsequent errors for 30s):`, error.message);
+        console.error(`Cache pattern delete error (suppressed subsequent errors for 30s):`, this.getErrorMessage(error));
       }
     }
   }
@@ -198,20 +232,21 @@ export class CacheService {
    */
   async incrementDailyView(comicId: number): Promise<void> {
     try {
-      const store = this.cacheManager.store as any;
-      if (store.client) {
+      const store = this.getRedisBackedStore();
+      const client = store?.client;
+      if (client) {
         const today = new Date().toISOString().split('T')[0];
         const key = `comic:views:daily:${today}`;
-        await store.client.zincrby(key, 1, comicId.toString());
+        await client.zincrby(key, 1, comicId.toString());
         // Set expiry to 2 days (172800 seconds) if it doesn't have one
-        const ttl = await store.client.ttl(key);
+        const ttl = await client.ttl(key);
         if (ttl === -1) {
-          await store.client.expire(key, 172800);
+          await client.expire(key, 172800);
         }
       }
     } catch (error) {
       if (this.shouldLogError()) {
-        console.error('Error incrementing daily view (suppressed subsequent errors for 30s):', error.message);
+        console.error('Error incrementing daily view (suppressed subsequent errors for 30s):', this.getErrorMessage(error));
       }
     }
   }
@@ -221,17 +256,17 @@ export class CacheService {
    */
   async getDailyTrendingComicIds(limit: number): Promise<number[]> {
     try {
-      const store = this.cacheManager.store as any;
-      if (store.client) {
+      const client = this.getRedisClient();
+      if (client) {
         const today = new Date().toISOString().split('T')[0];
         const key = `comic:views:daily:${today}`;
         // zrevrange returns highest scores first
-        const ids = await store.client.zrevrange(key, 0, limit - 1);
+        const ids = await client.zrevrange(key, 0, limit - 1);
         return ids.map((id: string) => parseInt(id, 10));
       }
     } catch (error) {
       if (this.shouldLogError()) {
-        console.error('Error getting daily trending (suppressed subsequent errors for 30s):', error.message);
+        console.error('Error getting daily trending (suppressed subsequent errors for 30s):', this.getErrorMessage(error));
       }
     }
     return [];

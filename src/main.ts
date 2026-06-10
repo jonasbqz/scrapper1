@@ -9,6 +9,7 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyHelmet from '@fastify/helmet';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { AppModule } from './app.module';
+import { parseCorsOrigins } from './lib/cors-origins';
 import { SanitizePipe } from './common/pipes';
 import { SanitizeInterceptor } from './common/interceptors';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -120,8 +121,11 @@ async function bootstrap() {
     crossOriginEmbedderPolicy: false,
   });
 
+  const corsOrigins = parseCorsOrigins(process.env.CORS_ORIGIN);
   app.enableCors({
-    origin: process.env.CORS_ORIGIN?.split(',') || ['https://mangolibreria.com', 'http://localhost:3000'],
+    origin: corsOrigins.length
+      ? corsOrigins
+      : ['https://mangolibreria.com', 'https://www.mangolibreria.com', 'http://localhost:3000'],
     credentials: true,
   });
 

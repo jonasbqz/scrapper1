@@ -6,6 +6,9 @@ import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { CacheService } from '@/cache/cache.service';
 import { getRequestClientIp } from '@/common/network/client-ip';
+import { parseTrustedRefererOrigins } from '@/lib/cors-origins';
+import { SessionResolverService } from '@/modules/auth/session-resolver';
+import { RouteProtectionService } from '@/modules/route-protection/route-protection.service';
 import { DATABASE_CONNECTION } from '@/database/database.module';
 import { trafficEvents } from '@/database/schema';
 import type * as schema from '@/database/schema';
@@ -78,6 +81,7 @@ export class TrafficEventsService {
   private readonly allowCidrs: string[];
   private readonly allowIps: string[];
   private readonly allowAsns: number[];
+  private readonly trustedRefererOrigins: string[];
   private tableMissingLogged = false;
 
   constructor(
@@ -85,6 +89,8 @@ export class TrafficEventsService {
     private readonly db: NodePgDatabase<typeof schema>,
     private readonly cacheService: CacheService,
     private readonly configService: ConfigService,
+    private readonly sessionResolver: SessionResolverService,
+    private readonly routeProtectionService: RouteProtectionService,
   ) {
     this.watchCidrs = parseCsvList(
       this.configService.get<string>('BOT_WATCH_IP_CIDRS') ||
@@ -99,6 +105,10 @@ export class TrafficEventsService {
     this.allowCidrs = parseCsvList(this.configService.get<string>('BOT_ALLOW_IP_CIDRS'));
     this.allowIps = parseCsvList(this.configService.get<string>('BOT_ALLOW_IPS'));
     this.allowAsns = parseAsnList(this.configService.get<string>('BOT_ALLOW_ASNS'));
+    this.trustedRefererOrigins = parseTrustedRefererOrigins(
+      this.configService.get<string>('TRUSTED_REFERER_ORIGINS') ||
+        this.configService.get<string>('CORS_ORIGIN'),
+    );
   }
 
   async record(input: RecordTrafficInput) {
@@ -116,7 +126,11 @@ export class TrafficEventsService {
     const userAgent = this.readHeader(input.request, 'user-agent');
     const referer = this.readHeader(input.request, 'referer') || this.readHeader(input.request, 'referrer');
     const acceptLanguage = this.readHeader(input.request, 'accept-language');
-    const userId = this.readHeader(input.request, 'x-user-id') || null;
+    const session = await this.sessionResolver.resolveSession(input.request.headers);
+    const userId = session?.user.id || null;
+    const hasInternalAccess = this.routeProtectionService.hasInternalAccess(
+      input.request.headers,
+    );
     const path = input.path || this.getRequestPath(input.request);
     const subjectSource = clientIp || userAgent || 'unknown';
     const subjectKey = hashTrafficSubject(subjectSource);
@@ -168,6 +182,7 @@ export class TrafficEventsService {
       clientIp,
       clientAsn,
       userAgent,
+      referer,
       path,
       searchQuery: input.searchQuery,
       userId,
@@ -176,6 +191,8 @@ export class TrafficEventsService {
       allowCidrs: this.allowCidrs,
       allowIps: this.allowIps,
       allowAsns: this.allowAsns,
+      trustedRefererOrigins: this.trustedRefererOrigins,
+      hasInternalAccess,
     });
 
     const counters = await this.inspectCounters({
@@ -708,8 +725,7 @@ export class TrafficEventsService {
   }
 
   private async incrementCounter(key: string, ttlMs: number): Promise<number> {
-    const store = (this.cacheService as any).cacheManager?.store;
-    const client = store?.client;
+    const client = this.cacheService.getRedisClient();
 
     if (client) {
       try {
@@ -738,8 +754,7 @@ export class TrafficEventsService {
       return 0;
     }
 
-    const store = (this.cacheService as any).cacheManager?.store;
-    const client = store?.client;
+    const client = this.cacheService.getRedisClient();
     if (!client) {
       return returnCardinality ? 0 : 1;
     }
