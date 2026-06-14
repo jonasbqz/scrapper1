@@ -207,18 +207,19 @@ export class ChapterController {
     @Query('chapterSegment') chapterSegment: string,
     @Req() request: FastifyRequest,
   ) {
+    const resolved = await this.chapterService.findPublicByRouteSegments(
+      decodeURIComponent(comicSegment || ''),
+      decodeURIComponent(chapterSegment || ''),
+    );
     await this.recordTrafficEvent(request, {
       eventType: 'chapter_lookup',
       entityType: 'chapter',
+      entityId: resolved.navigation.current.id,
       metadata: {
         comicSegment: decodeURIComponent(comicSegment || ''),
         chapterSegment: decodeURIComponent(chapterSegment || ''),
       },
     });
-    const resolved = await this.chapterService.findPublicByRouteSegments(
-      decodeURIComponent(comicSegment || ''),
-      decodeURIComponent(chapterSegment || ''),
-    );
 
     return this.buildChapterLookupResponse(resolved.navigation);
   }
@@ -230,18 +231,19 @@ export class ChapterController {
     @Param('chapterSegment') chapterSegment: string,
     @Req() request: FastifyRequest,
   ) {
+    const resolved = await this.chapterService.findPublicByRouteSegments(
+      decodeURIComponent(comicSegment),
+      decodeURIComponent(chapterSegment),
+    );
     await this.recordTrafficEvent(request, {
       eventType: 'chapter_lookup',
       entityType: 'chapter',
+      entityId: resolved.navigation.current.id,
       metadata: {
         comicSegment: decodeURIComponent(comicSegment),
         chapterSegment: decodeURIComponent(chapterSegment),
       },
     });
-    const resolved = await this.chapterService.findPublicByRouteSegments(
-      decodeURIComponent(comicSegment),
-      decodeURIComponent(chapterSegment),
-    );
 
     return this.buildChapterLookupResponse(resolved.navigation);
   }
@@ -252,16 +254,16 @@ export class ChapterController {
     @Param('id', ParseIntPipe) id: number,
     @Req() request: FastifyRequest,
   ) {
-    await this.recordTrafficEvent(request, {
-      eventType: 'chapter_lookup',
-      entityType: 'chapter',
-      entityId: id,
-    });
     const nav = await this.chapterService.getNavigation(id);
     await this.routeProtectionService.assertLegacyAccess(
       nav.current.comicScan?.comic,
       request.headers,
     );
+    await this.recordTrafficEvent(request, {
+      eventType: 'chapter_lookup',
+      entityType: 'chapter',
+      entityId: id,
+    });
     return this.buildChapterLookupResponse(nav);
   }
 

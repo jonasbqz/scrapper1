@@ -6,6 +6,17 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
 import { CreatePlaylistDto, UpdatePlaylistDto, ReorderPlaylistDto } from './playlists.dto';
 
+const PLAYLIST_COMIC_COLUMNS = {
+  id: true,
+  title: true,
+  coverImage: true,
+  slug: true,
+  type: true,
+  status: true,
+  protectedRouteEnabled: true,
+  isNsfw: true,
+} as const;
+
 @Injectable()
 export class PlaylistsService {
   constructor(
@@ -41,15 +52,7 @@ export class PlaylistsService {
           orderBy: [asc(playlistItems.order)],
           with: {
             comic: {
-              columns: {
-                id: true,
-                title: true,
-                coverImage: true,
-                slug: true,
-                type: true,
-                status: true,
-                protectedRouteEnabled: true,
-              },
+              columns: PLAYLIST_COMIC_COLUMNS,
             },
           },
         },
@@ -82,15 +85,7 @@ export class PlaylistsService {
           orderBy: [asc(playlistItems.order)],
           with: {
             comic: {
-              columns: {
-                id: true,
-                title: true,
-                coverImage: true,
-                slug: true,
-                type: true,
-                status: true,
-                protectedRouteEnabled: true,
-              },
+              columns: PLAYLIST_COMIC_COLUMNS,
             },
           },
         },
@@ -118,15 +113,7 @@ export class PlaylistsService {
           orderBy: [asc(playlistItems.order)],
           with: {
             comic: {
-              columns: {
-                id: true,
-                title: true,
-                coverImage: true,
-                slug: true,
-                type: true,
-                status: true,
-                protectedRouteEnabled: true,
-              },
+              columns: PLAYLIST_COMIC_COLUMNS,
             },
           },
         },

@@ -45,7 +45,7 @@ export class TrafficEventsController {
 
   @Get('blocked')
   @ApiOperation({ summary: 'Blocked bot subjects with manual unblock status' })
-  @ApiQuery({ name: 'status', required: false, enum: ['active', 'unblocked', 'all'] })
+  @ApiQuery({ name: 'status', required: false, enum: ['active', 'unblocked', 'expired', 'all'] })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'offset', required: false, type: Number })
   @ApiQuery({ name: 'q', required: false, description: 'Search by IPv4/IPv6, subject key, ASN, user-agent, reason, or status' })

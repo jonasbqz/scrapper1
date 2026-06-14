@@ -3,6 +3,7 @@ import { auth } from '@/lib/auth';
 import { profiles, session as authSession } from '@/database/schema';
 import { eq } from 'drizzle-orm';
 import { DATABASE_CONNECTION } from '@/database/database.module';
+import { isDatabaseConnectionError } from '@/lib/db-pool';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
 
@@ -40,11 +41,17 @@ export class SessionResolverService {
         authHeader.toLowerCase().startsWith('bearer ')
       ) {
         const tokenStr = authHeader.substring(7).trim();
-        const sessionRecord = await this.db.query.session.findFirst({
-          where: eq(authSession.token, tokenStr),
-        });
-        if (sessionRecord?.userId) {
-          session = { user: { id: sessionRecord.userId } } as any;
+        try {
+          const sessionRecord = await this.db.query.session.findFirst({
+            where: eq(authSession.token, tokenStr),
+          });
+          if (sessionRecord?.userId) {
+            session = { user: { id: sessionRecord.userId } } as any;
+          }
+        } catch (error) {
+          if (!isDatabaseConnectionError(error)) {
+            throw error;
+          }
         }
       }
     }

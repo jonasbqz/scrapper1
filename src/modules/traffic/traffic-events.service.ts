@@ -7,6 +7,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { CacheService } from '@/cache/cache.service';
 import { getRequestClientIp } from '@/common/network/client-ip';
 import { parseTrustedRefererOrigins } from '@/lib/cors-origins';
+import { isDatabaseConnectionError } from '@/lib/db-pool';
 import { SessionResolverService } from '@/modules/auth/session-resolver';
 import { RouteProtectionService } from '@/modules/route-protection/route-protection.service';
 import { DATABASE_CONNECTION } from '@/database/database.module';
@@ -58,7 +59,14 @@ type TrafficAggregatePayload = TrafficEventPersistencePayload & {
   uniqueSearchHit: number;
 };
 
-type BlockedSubjectStatus = 'active' | 'unblocked' | 'all';
+type BlockedSubjectStatus = 'active' | 'unblocked' | 'expired' | 'all';
+
+type BlockedSubjectsSummary = {
+  active: number;
+  expired: number;
+  unblocked: number;
+  expiringSoon: number;
+};
 
 const HOUR_MS = 60 * 60 * 1000;
 const DEFAULT_RAW_MIN_RISK_SCORE = 35;
@@ -79,6 +87,8 @@ const LOOKUP_EVENT_TYPES = new Set<TrafficEventType>([
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_BLOCKED_SUBJECTS_LIMIT = 100;
 const MAX_BLOCKED_SUBJECTS_LIMIT = 500;
+const BLOCKED_SUBJECT_CACHE_TTL_MS = 60_000;
+const DEFAULT_TRAFFIC_PERSIST_CONCURRENCY = 3;
 
 @Injectable()
 export class TrafficEventsService {
@@ -89,6 +99,9 @@ export class TrafficEventsService {
   private readonly allowAsns: number[];
   private readonly trustedRefererOrigins: string[];
   private tableMissingLogged = false;
+  private lastConnectionErrorLogAt = 0;
+  private trafficPersistInFlight = 0;
+  private trafficPersistWaiters: Array<() => void> = [];
 
   constructor(
     @Inject(DATABASE_CONNECTION)
@@ -162,15 +175,17 @@ export class TrafficEventsService {
     const activeBlock = await this.getActiveBlockedSubject(subjectKey);
     if (activeBlock) {
       if (this.shouldHonorActiveBlock(activeBlock)) {
-        await this.touchBlockedSubject(subjectKey, {
-          clientIp,
-          clientAsn,
-          userAgent,
-          path,
-          eventType: input.eventType,
-          entityType: input.entityType || null,
-          entityId: input.entityId || null,
-        });
+        this.enqueueTrafficPersistTask(() =>
+          this.touchBlockedSubject(subjectKey, {
+            clientIp,
+            clientAsn,
+            userAgent,
+            path,
+            eventType: input.eventType,
+            entityType: input.entityType || null,
+            entityId: input.entityId || null,
+          }),
+        );
 
         return {
           action: 'rate_limited' as TrafficAction,
@@ -180,7 +195,9 @@ export class TrafficEventsService {
         };
       }
 
-      await this.expireIgnoredActiveBlock(subjectKey, activeBlock.reasons);
+      this.enqueueTrafficPersistTask(() =>
+        this.expireIgnoredActiveBlock(subjectKey, activeBlock.reasons),
+      );
     }
 
     const staticInspection = inspectTrafficEvent({
@@ -274,20 +291,19 @@ export class TrafficEventsService {
     };
 
     if (shouldBlock) {
-      await this.persistBlockedSubject(eventPayload);
+      await this.cacheService.set(
+        this.blockedSubjectCacheKey(subjectKey),
+        { riskScore, reasons },
+        this.getBlockTtlHours() * HOUR_MS,
+      );
     }
 
-    await this.persistAggregate({
-      ...eventPayload,
+    this.enqueueTrafficPersistence({
+      eventPayload,
       uniquePathHit,
       uniqueSearchHit,
+      shouldBlock,
     });
-
-    if (await this.shouldPersistRawEvent(eventPayload)) {
-      await this.persistEvent(eventPayload);
-    }
-
-    void this.cleanupOldTrafficData();
 
     return { action, blocked: shouldBlock, riskScore, reasons };
   }
@@ -389,34 +405,42 @@ export class TrafficEventsService {
     const limit = Math.min(Math.max(filters.limit || 100, 1), 500);
     const minRisk = Math.min(Math.max(filters.minRisk || 0, 0), 100);
 
-    const rows = await this.db.execute(sql`
-      select
-        id,
-        occurred_at as "occurredAt",
-        event_type as "eventType",
-        action,
-        subject_key as "subjectKey",
-        client_ip as "clientIp",
-        client_asn as "clientAsn",
-        user_agent as "userAgent",
-        path,
-        method,
-        user_id as "userId",
-        search_query as "searchQuery",
-        entity_type as "entityType",
-        entity_id as "entityId",
-        risk_score as "riskScore",
-        reasons,
-        metadata
-      from traffic_events
-      where risk_score >= ${minRisk}
-        and (${filters.eventType || null}::text is null or event_type = ${filters.eventType || null})
-        and (${filters.clientIp || null}::text is null or client_ip = ${filters.clientIp || null})
-      order by occurred_at desc
-      limit ${limit}
-    `);
+    try {
+      const rows = await this.db.execute(sql`
+        select
+          id,
+          occurred_at as "occurredAt",
+          event_type as "eventType",
+          action,
+          subject_key as "subjectKey",
+          client_ip as "clientIp",
+          client_asn as "clientAsn",
+          user_agent as "userAgent",
+          path,
+          method,
+          user_id as "userId",
+          search_query as "searchQuery",
+          entity_type as "entityType",
+          entity_id as "entityId",
+          risk_score as "riskScore",
+          reasons,
+          metadata
+        from traffic_events
+        where risk_score >= ${minRisk}
+          and (${filters.eventType || null}::text is null or event_type = ${filters.eventType || null})
+          and (${filters.clientIp || null}::text is null or client_ip = ${filters.clientIp || null})
+        order by occurred_at desc
+        limit ${limit}
+      `);
 
-    return this.rows(rows);
+      return this.rows(rows);
+    } catch (error) {
+      this.throwTrafficQueryError(
+        'No se pudieron cargar eventos recientes. Ejecuta la migración 0012_traffic_events.sql en monline-api.',
+        error,
+        '0012_traffic_events.sql',
+      );
+    }
   }
 
   async getSuspiciousSubjects(filters: { hours?: number; limit?: number }) {
@@ -425,7 +449,7 @@ export class TrafficEventsService {
 
     try {
       const result = await this.db.transaction(async (tx) => {
-        await tx.execute(sql`set local statement_timeout = '15s'`);
+        await tx.execute(sql`set local statement_timeout = '30s'`);
 
         return tx.execute(sql`
           with subject_stats as (
@@ -442,7 +466,6 @@ export class TrafficEventsService {
               sum(total_events)::int as "events",
               sum(search_events)::int as "searches",
               sum(content_events)::int as "contentViews",
-              sum(lookup_events)::int as "lookupEvents",
               sum(unique_path_hits)::int as "uniquePaths",
               sum(unique_search_hits)::int as "uniqueSearches",
               max(max_risk_score)::int as "maxRiskScore",
@@ -464,16 +487,6 @@ export class TrafficEventsService {
               or sum(unique_search_hits) >= 15
             order by max(max_risk_score) desc, sum(total_events) desc
             limit ${limit}
-          ),
-          subject_reasons as (
-            select
-              t.subject_key as "subjectKey",
-              to_jsonb(array_remove(array_agg(distinct reason.value), null)) as reasons
-            from traffic_subject_windows t
-            inner join subject_stats s on s."subjectKey" = t.subject_key
-            left join lateral jsonb_array_elements_text(t.reasons) as reason(value) on true
-            where t.window_start >= date_trunc('hour', now() - (${hours}::text || ' hours')::interval)
-            group by t.subject_key
           )
           select
             s."subjectKey",
@@ -492,34 +505,30 @@ export class TrafficEventsService {
             s."uniqueSearches",
             s."maxRiskScore",
             s."avgRiskScore",
-            coalesce(r.reasons, '[]'::jsonb) as reasons
+            coalesce((
+              select jsonb_agg(distinct reason.value)
+              from traffic_subject_windows t
+              cross join lateral jsonb_array_elements_text(t.reasons) as reason(value)
+              where t.subject_key = s."subjectKey"
+                and t.window_start >= date_trunc('hour', now() - (${hours}::text || ' hours')::interval)
+            ), '[]'::jsonb) as reasons
           from subject_stats s
-          left join subject_reasons r on r."subjectKey" = s."subjectKey"
         `);
       });
 
       return this.rows(result);
     } catch (error) {
-      const code = (error as { code?: string; cause?: { code?: string } })?.code
-        || (error as { cause?: { code?: string } })?.cause?.code;
-
-      if (code === '42P01' || code === '42703') {
-        console.warn(
-          'traffic_subject_windows table is missing or outdated; run the 0013 traffic rollups migration.',
-        );
-        return [];
-      }
-
-      console.error('Failed to load suspicious traffic subjects:', error);
-      throw new InternalServerErrorException(
-        'No se pudo cargar sujetos sospechosos. La consulta tardó demasiado o la tabla de tráfico no está disponible.',
+      this.throwTrafficQueryError(
+        'No se pudo cargar sujetos sospechosos. Prueba un periodo más corto o ejecuta las migraciones 0013_traffic_rollups.sql y 0016_traffic_suspicious_query_idx.sql.',
+        error,
+        '0013_traffic_rollups.sql',
       );
     }
   }
 
   async getBlockedSubjects(filters: { status?: string; limit?: number; offset?: number; q?: string }) {
     const requestedStatus = filters.status || 'active';
-    const status: BlockedSubjectStatus = ['active', 'unblocked', 'all'].includes(requestedStatus)
+    const status: BlockedSubjectStatus = ['active', 'unblocked', 'expired', 'all'].includes(requestedStatus)
       ? requestedStatus as BlockedSubjectStatus
       : 'active';
     const limit = Math.min(
@@ -529,23 +538,41 @@ export class TrafficEventsService {
     const offset = Math.max(filters.offset || 0, 0);
     const search = (filters.q || '').trim();
     const searchPattern = search ? `%${search}%` : null;
+    const statusFilter = this.buildBlockedStatusFilter(status);
 
     try {
-      const countResult = await this.db.execute(sql`
-        select count(*)::int as total
-        from traffic_blocked_subjects
-        where (${status}::text = 'all' or status = ${status})
-          and (
-            ${searchPattern}::text is null
-            or client_ip ilike ${searchPattern}
-            or subject_key ilike ${searchPattern}
-            or coalesce(user_agent, '') ilike ${searchPattern}
-            or coalesce(block_reason, '') ilike ${searchPattern}
-            or status ilike ${searchPattern}
-            or coalesce(client_asn::text, '') ilike ${searchPattern}
-            or reasons::text ilike ${searchPattern}
-          )
-      `);
+      const [summaryResult, countResult] = await Promise.all([
+        this.db.execute(sql`
+          select
+            count(*) filter (where status = 'active')::int as "active",
+            count(*) filter (where status = 'expired')::int as "expired",
+            count(*) filter (where status = 'unblocked')::int as "unblocked",
+            count(*) filter (
+              where status = 'active'
+                and blocked_until is not null
+                and blocked_until > now()
+                and blocked_until <= now() + interval '1 hour'
+            )::int as "expiringSoon"
+          from traffic_blocked_subjects
+        `),
+        this.db.execute(sql`
+          select count(*)::int as total
+          from traffic_blocked_subjects
+          where ${statusFilter}
+            and (
+              ${searchPattern}::text is null
+              or client_ip ilike ${searchPattern}
+              or subject_key ilike ${searchPattern}
+              or coalesce(user_agent, '') ilike ${searchPattern}
+              or coalesce(block_reason, '') ilike ${searchPattern}
+              or status ilike ${searchPattern}
+              or coalesce(client_asn::text, '') ilike ${searchPattern}
+              or reasons::text ilike ${searchPattern}
+            )
+        `),
+      ]);
+
+      const [summaryRow] = this.rows(summaryResult) as BlockedSubjectsSummary[];
       const [countRow] = this.rows(countResult) as Array<{ total?: number }>;
 
       const rows = await this.db.execute(sql`
@@ -567,7 +594,7 @@ export class TrafficEventsService {
           unblock_reason as "unblockReason",
           metadata
         from traffic_blocked_subjects
-        where (${status}::text = 'all' or status = ${status})
+        where ${statusFilter}
           and (
             ${searchPattern}::text is null
             or client_ip ilike ${searchPattern}
@@ -590,10 +617,19 @@ export class TrafficEventsService {
         total: Number(countRow?.total || 0),
         limit,
         offset,
+        summary: {
+          active: Number(summaryRow?.active || 0),
+          expired: Number(summaryRow?.expired || 0),
+          unblocked: Number(summaryRow?.unblocked || 0),
+          expiringSoon: Number(summaryRow?.expiringSoon || 0),
+        },
       };
     } catch (error) {
-      this.handleTrafficStorageError(error, 'traffic_blocked_subjects table is missing; run the 0014 blocked subjects migration.');
-      return { items: [], total: 0, limit, offset };
+      this.throwTrafficQueryError(
+        'No se pudieron cargar bloqueos. Ejecuta las migraciones 0014_traffic_blocked_subjects.sql y 0015_traffic_block_ttl.sql.',
+        error,
+        '0014_traffic_blocked_subjects.sql',
+      );
     }
   }
 
@@ -1012,6 +1048,12 @@ export class TrafficEventsService {
   }
 
   private async isManuallyUnblockedSubject(subjectKey: string): Promise<boolean> {
+    const cacheKey = this.manualUnblockCacheKey(subjectKey);
+    const cached = await this.cacheService.get<boolean>(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
     try {
       const result = await this.db.execute(sql`
         select status
@@ -1020,7 +1062,9 @@ export class TrafficEventsService {
         limit 1
       `);
       const [row] = this.rows(result) as Array<{ status?: string }>;
-      return row?.status === 'unblocked';
+      const isUnblocked = row?.status === 'unblocked';
+      await this.cacheService.set(cacheKey, isUnblocked, BLOCKED_SUBJECT_CACHE_TTL_MS);
+      return isUnblocked;
     } catch (error) {
       this.handleTrafficStorageError(error, 'traffic_blocked_subjects table is missing; run the 0014 blocked subjects migration.');
       return false;
@@ -1069,6 +1113,15 @@ export class TrafficEventsService {
     riskScore: number;
     reasons: string[];
   } | null> {
+    const cacheKey = this.blockedSubjectCacheKey(subjectKey);
+    const cached = await this.cacheService.get<{
+      riskScore: number;
+      reasons: string[];
+    } | null>(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
     try {
       const result = await this.db.execute(sql`
         select
@@ -1085,14 +1138,15 @@ export class TrafficEventsService {
         reasons?: string[];
       }>;
 
-      if (!row) {
-        return null;
-      }
+      const activeBlock = row
+        ? {
+            riskScore: Number(row.riskScore || 100),
+            reasons: Array.isArray(row.reasons) ? row.reasons : [],
+          }
+        : null;
 
-      return {
-        riskScore: Number(row.riskScore || 100),
-        reasons: Array.isArray(row.reasons) ? row.reasons : [],
-      };
+      await this.cacheService.set(cacheKey, activeBlock, BLOCKED_SUBJECT_CACHE_TTL_MS);
+      return activeBlock;
     } catch (error) {
       this.handleTrafficStorageError(error, 'traffic_blocked_subjects table is missing; run the 0015 block TTL migration.');
       return null;
@@ -1325,7 +1379,102 @@ export class TrafficEventsService {
       }
       return;
     }
+
+    if (isDatabaseConnectionError(error)) {
+      const now = Date.now();
+      if (now - this.lastConnectionErrorLogAt >= 30_000) {
+        this.lastConnectionErrorLogAt = now;
+        console.warn(
+          'Traffic storage skipped: database pool saturated or unavailable.',
+        );
+      }
+      return;
+    }
+
     console.error('Failed to persist traffic data:', error);
+  }
+
+  private blockedSubjectCacheKey(subjectKey: string): string {
+    return `traffic:blocked:active:${subjectKey}`;
+  }
+
+  private manualUnblockCacheKey(subjectKey: string): string {
+    return `traffic:blocked:manual:${subjectKey}`;
+  }
+
+  private getTrafficPersistConcurrency(): number {
+    return Math.max(
+      this.readIntConfig(
+        'TRAFFIC_PERSIST_CONCURRENCY',
+        DEFAULT_TRAFFIC_PERSIST_CONCURRENCY,
+      ),
+      1,
+    );
+  }
+
+  private async acquireTrafficPersistSlot(): Promise<void> {
+    const maxConcurrency = this.getTrafficPersistConcurrency();
+    if (this.trafficPersistInFlight < maxConcurrency) {
+      this.trafficPersistInFlight += 1;
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      this.trafficPersistWaiters.push(() => {
+        this.trafficPersistInFlight += 1;
+        resolve();
+      });
+    });
+  }
+
+  private releaseTrafficPersistSlot(): void {
+    this.trafficPersistInFlight = Math.max(0, this.trafficPersistInFlight - 1);
+    const next = this.trafficPersistWaiters.shift();
+    if (next) {
+      next();
+    }
+  }
+
+  private enqueueTrafficPersistTask(task: () => Promise<void>): void {
+    void (async () => {
+      await this.acquireTrafficPersistSlot();
+      try {
+        await task();
+      } catch (error) {
+        this.handleTrafficStorageError(
+          error,
+          'Failed to persist traffic data asynchronously.',
+        );
+      } finally {
+        this.releaseTrafficPersistSlot();
+      }
+    })();
+  }
+
+  private enqueueTrafficPersistence(input: {
+    eventPayload: TrafficEventPersistencePayload;
+    uniquePathHit: number;
+    uniqueSearchHit: number;
+    shouldBlock: boolean;
+  }): void {
+    this.enqueueTrafficPersistTask(async () => {
+      if (input.shouldBlock) {
+        await this.persistBlockedSubject(input.eventPayload);
+        await this.cacheService.del(
+          this.manualUnblockCacheKey(input.eventPayload.subjectKey),
+        );
+      }
+
+      await this.persistAggregate({
+        ...input.eventPayload,
+        uniquePathHit: input.uniquePathHit,
+        uniqueSearchHit: input.uniqueSearchHit,
+      });
+
+      if (await this.shouldPersistRawEvent(input.eventPayload)) {
+        await this.persistEvent(input.eventPayload);
+      }
+    });
   }
 
   @Interval(CLEANUP_INTERVAL_MS)
@@ -1418,5 +1567,37 @@ export class TrafficEventsService {
     if (Array.isArray(result)) return result;
     const maybeRows = (result as { rows?: unknown[] })?.rows;
     return Array.isArray(maybeRows) ? maybeRows : [];
+  }
+
+  private getPgErrorCode(error: unknown): string | undefined {
+    const direct = (error as { code?: string })?.code;
+    if (direct) return direct;
+    return (error as { cause?: { code?: string } })?.cause?.code;
+  }
+
+  private buildBlockedStatusFilter(status: BlockedSubjectStatus) {
+    if (status === 'all') {
+      return sql`true`;
+    }
+    return sql`status = ${status}`;
+  }
+
+  private throwTrafficQueryError(message: string, error: unknown, migrationFile: string): never {
+    const code = this.getPgErrorCode(error);
+
+    if (code === '42P01' || code === '42703') {
+      throw new InternalServerErrorException(
+        `${message} Migración pendiente: ${migrationFile}`,
+      );
+    }
+
+    if (code === '57014') {
+      throw new InternalServerErrorException(
+        `${message} La consulta excedió el tiempo límite.`,
+      );
+    }
+
+    console.error(message, error);
+    throw new InternalServerErrorException(message);
   }
 }
