@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { Pool } from 'pg';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'src/database/migrations');
+const MAX_DEADLOCK_RETRIES = Number(process.env.MIGRATE_DEADLOCK_RETRIES || 8);
 
 const MANUAL_MIGRATIONS = [
   '0001_add_performance_indexes.sql',
@@ -23,6 +24,14 @@ const MANUAL_MIGRATIONS = [
   '0016_traffic_suspicious_query_idx.sql',
   '0017_ensure_runtime_schema.sql',
 ] as const;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getPgErrorCode(error: unknown): string | undefined {
+  return (error as { code?: string })?.code;
+}
 
 async function ensureTrackingTable(pool: Pool): Promise<void> {
   await pool.query(`
@@ -50,13 +59,47 @@ function discoverLooseSqlFiles(): string[] {
 }
 
 function isBenignMigrationError(error: unknown): boolean {
-  const pgError = error as { code?: string };
+  const code = getPgErrorCode(error);
   return (
-    pgError.code === '42701' || // duplicate_column
-    pgError.code === '42P07' || // duplicate_table
-    pgError.code === '42710' || // duplicate_object
-    pgError.code === '23505'    // unique_violation (indexes)
+    code === '42701' ||
+    code === '42P07' ||
+    code === '42710' ||
+    code === '23505'
   );
+}
+
+function isRetryableMigrationError(error: unknown): boolean {
+  const code = getPgErrorCode(error);
+  return code === '40P01' || code === '55P03';
+}
+
+async function queryWithRetry(
+  pool: Pool,
+  sql: string,
+  label: string,
+): Promise<void> {
+  for (let attempt = 1; attempt <= MAX_DEADLOCK_RETRIES; attempt += 1) {
+    try {
+      await pool.query(sql);
+      return;
+    } catch (error) {
+      if (isBenignMigrationError(error)) {
+        console.warn(`[migrate] ${label} already applied in DB`);
+        return;
+      }
+
+      if (isRetryableMigrationError(error) && attempt < MAX_DEADLOCK_RETRIES) {
+        const waitMs = Math.min(2000 * attempt, 15000);
+        console.warn(
+          `[migrate] ${label} lock contention (attempt ${attempt}/${MAX_DEADLOCK_RETRIES}), retrying in ${waitMs}ms...`,
+        );
+        await sleep(waitMs);
+        continue;
+      }
+
+      throw error;
+    }
+  }
 }
 
 async function applyMigration(pool: Pool, filename: string): Promise<void> {
@@ -64,18 +107,7 @@ async function applyMigration(pool: Pool, filename: string): Promise<void> {
   const sql = readFileSync(filePath, 'utf8');
 
   console.log(`[migrate] applying ${filename}`);
-  try {
-    await pool.query(sql);
-  } catch (error) {
-    if (isBenignMigrationError(error)) {
-      console.warn(
-        `[migrate] ${filename} already applied in DB, marking as done`,
-      );
-    } else {
-      console.error(`[migrate] failed on ${filename}:`, error);
-      throw error;
-    }
-  }
+  await queryWithRetry(pool, sql, filename);
 
   await pool.query(
     'INSERT INTO manual_migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING',
@@ -90,7 +122,15 @@ async function main(): Promise<void> {
     throw new Error('DATABASE_URL is required to apply manual migrations');
   }
 
-  const pool = new Pool({ connectionString: databaseUrl });
+  console.warn(
+    '[migrate] tip: stop monline-api during migrations to avoid deadlocks on busy tables',
+  );
+
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    max: 1,
+  });
+
   try {
     await ensureTrackingTable(pool);
     const applied = await getAppliedMigrations(pool);

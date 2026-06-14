@@ -33,13 +33,8 @@ BEGIN
   END IF;
 END $$;
 
-ALTER TABLE "comics"
-  ADD COLUMN IF NOT EXISTS "reactions_total" integer DEFAULT 0 NOT NULL,
-  ADD COLUMN IF NOT EXISTS "reactions_summary" jsonb DEFAULT '{"upvote":0,"funny":0,"love":0,"surprised":0,"angry":0,"sad":0}'::jsonb NOT NULL;
-
-ALTER TABLE "chapters"
-  ADD COLUMN IF NOT EXISTS "reactions_total" integer DEFAULT 0 NOT NULL,
-  ADD COLUMN IF NOT EXISTS "reactions_summary" jsonb DEFAULT '{"upvote":0,"funny":0,"love":0,"surprised":0,"angry":0,"sad":0}'::jsonb NOT NULL;
+-- comics/chapters reaction columns are ensured by 0017_ensure_runtime_schema.sql
+-- Skipping ALTER on hot tables here avoids deadlocks while the API is serving traffic.
 
 ALTER TABLE "comments"
   ADD COLUMN IF NOT EXISTS "upvotes_count" integer DEFAULT 0 NOT NULL,
