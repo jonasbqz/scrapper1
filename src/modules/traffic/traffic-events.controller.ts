@@ -33,13 +33,16 @@ export class TrafficEventsController {
   @ApiOperation({ summary: 'Aggregate suspicious clients from recent traffic events' })
   @ApiQuery({ name: 'hours', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'minEvents', required: false, type: Number })
   async suspicious(
     @Query('hours') hours?: string,
     @Query('limit') limit?: string,
+    @Query('minEvents') minEvents?: string,
   ) {
     return this.trafficEventsService.getSuspiciousSubjects({
       hours: hours ? Number.parseInt(hours, 10) : undefined,
       limit: limit ? Number.parseInt(limit, 10) : undefined,
+      minEvents: minEvents ? Number.parseInt(minEvents, 10) : undefined,
     });
   }
 

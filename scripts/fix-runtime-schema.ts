@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import { ensureRuntimeSchema } from '../src/database/ensure-runtime-schema';
+import { ensureTrafficSchema } from '../src/database/ensure-traffic-schema';
 
 async function main(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL;
@@ -10,6 +11,7 @@ async function main(): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl });
   try {
     await ensureRuntimeSchema(pool);
+    await ensureTrafficSchema(pool);
     console.log('[db:fix-schema] schema ok');
   } finally {
     await pool.end();

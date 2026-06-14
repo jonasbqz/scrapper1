@@ -42,6 +42,8 @@ type CounterSignals = {
   minuteEvents: number;
   minuteSearches: number;
   minuteContentViews: number;
+  hourEvents: number;
+  dayEvents: number;
   repeatedSearches: number;
   repeatedPathHits: number;
   uniquePaths10m: number;
@@ -89,6 +91,8 @@ const DEFAULT_BLOCKED_SUBJECTS_LIMIT = 100;
 const MAX_BLOCKED_SUBJECTS_LIMIT = 500;
 const BLOCKED_SUBJECT_CACHE_TTL_MS = 60_000;
 const DEFAULT_TRAFFIC_PERSIST_CONCURRENCY = 3;
+const DEFAULT_BLOCK_MAX_REQUESTS_PER_HOUR = 1500;
+const DEFAULT_BLOCK_MAX_REQUESTS_PER_DAY = 12000;
 
 @Injectable()
 export class TrafficEventsService {
@@ -364,10 +368,38 @@ export class TrafficEventsService {
     const hardRequestBurst =
       input.counters.thirtySecondEvents > blockMaxRequestsPer30s;
     const isHumanEngaged = await this.hasRecentHumanEngagement(ipKey);
+    const blockMaxRequestsPerHour = Math.ceil(
+      this.readIntConfig(
+        'BOT_BLOCK_MAX_REQUESTS_PER_HOUR',
+        DEFAULT_BLOCK_MAX_REQUESTS_PER_HOUR,
+      ) * limitMultiplier,
+    );
+    const blockMaxRequestsPerDay = Math.ceil(
+      this.readIntConfig(
+        'BOT_BLOCK_MAX_REQUESTS_PER_DAY',
+        DEFAULT_BLOCK_MAX_REQUESTS_PER_DAY,
+      ) * limitMultiplier,
+    );
+    const extremeHourlyVolume = input.counters.hourEvents >= blockMaxRequestsPerHour * 3;
+    const sustainedHourlyVolume =
+      input.counters.hourEvents > blockMaxRequestsPerHour;
+    const sustainedDailyVolume =
+      input.counters.dayEvents > blockMaxRequestsPerDay;
 
     // Authenticated readers bingeing chapters should not get fake-404 blocks from
     // request volume alone. Search bursts remain protected even when logged in.
     if (hardSearchBurst) {
+      return true;
+    }
+
+    if (sustainedDailyVolume && !input.userId) {
+      return true;
+    }
+
+    if (sustainedHourlyVolume) {
+      if (isHumanEngaged && !extremeHourlyVolume) {
+        return false;
+      }
       return true;
     }
 
@@ -443,76 +475,47 @@ export class TrafficEventsService {
     }
   }
 
-  async getSuspiciousSubjects(filters: { hours?: number; limit?: number }) {
+  async getSuspiciousSubjects(filters: {
+    hours?: number;
+    limit?: number;
+    minEvents?: number;
+  }) {
     const hours = Math.min(Math.max(filters.hours || 24, 1), 24 * 30);
     const limit = Math.min(Math.max(filters.limit || 100, 1), 500);
+    const minEvents = Math.min(Math.max(filters.minEvents || 25, 1), 10_000);
 
     try {
       const result = await this.db.transaction(async (tx) => {
-        await tx.execute(sql`set local statement_timeout = '30s'`);
+        await tx.execute(sql`set local statement_timeout = '45s'`);
 
         return tx.execute(sql`
-          with subject_stats as (
-            select
-              subject_key as "subjectKey",
-              max(client_ip) as "clientIp",
-              max(client_asn) as "clientAsn",
-              max(user_id) as "userId",
-              count(distinct user_id)::int as "userCount",
-              max(user_agent) as "lastUserAgent",
-              max(last_path) as "lastPath",
-              min(first_seen_at) as "firstSeenAt",
-              max(last_seen_at) as "lastSeenAt",
-              sum(total_events)::int as "events",
-              sum(search_events)::int as "searches",
-              sum(content_events)::int as "contentViews",
-              sum(unique_path_hits)::int as "uniquePaths",
-              sum(unique_search_hits)::int as "uniqueSearches",
-              max(max_risk_score)::int as "maxRiskScore",
-              (sum(risk_score_sum)::float / nullif(sum(risk_samples), 0))::float as "avgRiskScore"
-            from traffic_subject_windows
-            where window_start >= date_trunc('hour', now() - (${hours}::text || ' hours')::interval)
-              and (
-                max_risk_score >= 35
-                or total_events >= 20
-                or search_events >= 5
-                or unique_path_hits >= 10
-                or unique_search_hits >= 5
-              )
-            group by subject_key
-            having max(max_risk_score) >= 35
-              or sum(total_events) >= 80
-              or sum(search_events) >= 20
-              or sum(unique_path_hits) >= 40
-              or sum(unique_search_hits) >= 15
-            order by max(max_risk_score) desc, sum(total_events) desc
-            limit ${limit}
-          )
           select
-            s."subjectKey",
-            s."clientIp",
-            s."clientAsn",
-            s."userId",
-            s."userCount",
-            s."lastUserAgent",
-            s."lastPath",
-            s."firstSeenAt",
-            s."lastSeenAt",
-            s."events",
-            s."searches",
-            s."contentViews",
-            s."uniquePaths",
-            s."uniqueSearches",
-            s."maxRiskScore",
-            s."avgRiskScore",
-            coalesce((
-              select jsonb_agg(distinct reason.value)
-              from traffic_subject_windows t
-              cross join lateral jsonb_array_elements_text(t.reasons) as reason(value)
-              where t.subject_key = s."subjectKey"
-                and t.window_start >= date_trunc('hour', now() - (${hours}::text || ' hours')::interval)
-            ), '[]'::jsonb) as reasons
-          from subject_stats s
+            subject_key as "subjectKey",
+            max(client_ip) as "clientIp",
+            max(client_asn) as "clientAsn",
+            max(user_id) as "userId",
+            count(distinct user_id)::int as "userCount",
+            max(user_agent) as "lastUserAgent",
+            max(last_path) as "lastPath",
+            min(first_seen_at) as "firstSeenAt",
+            max(last_seen_at) as "lastSeenAt",
+            sum(total_events)::int as "events",
+            sum(search_events)::int as "searches",
+            sum(content_events)::int as "contentViews",
+            sum(unique_path_hits)::int as "uniquePaths",
+            sum(unique_search_hits)::int as "uniqueSearches",
+            max(max_risk_score)::int as "maxRiskScore",
+            (sum(risk_score_sum)::float / nullif(sum(risk_samples), 0))::float as "avgRiskScore",
+            '[]'::jsonb as reasons
+          from traffic_subject_windows
+          where window_start >= date_trunc('hour', now() - (${hours}::text || ' hours')::interval)
+          group by subject_key
+          having sum(total_events) >= ${minEvents}
+            or max(max_risk_score) >= 35
+            or sum(search_events) >= 15
+            or sum(unique_path_hits) >= 25
+          order by sum(total_events) desc, max(max_risk_score) desc
+          limit ${limit}
         `);
       });
 
@@ -728,6 +731,18 @@ export class TrafficEventsService {
           `traffic:${keySubject}:events:1m`,
           60 * 1000,
         );
+    const hourEvents = isLookupEvent
+      ? 0
+      : await this.incrementCounter(
+          `traffic:${keySubject}:events:1h`,
+          HOUR_MS,
+        );
+    const dayEvents = isLookupEvent
+      ? 0
+      : await this.incrementCounter(
+          `traffic:${keySubject}:events:24h`,
+          24 * HOUR_MS,
+        );
 
     let thirtySecondSearches = 0;
     let minuteSearches = 0;
@@ -827,6 +842,48 @@ export class TrafficEventsService {
       reasons.push('hard_search_burst_30s');
     }
 
+    const blockMaxRequestsPerHour = Math.ceil(
+      this.readIntConfig(
+        'BOT_BLOCK_MAX_REQUESTS_PER_HOUR',
+        DEFAULT_BLOCK_MAX_REQUESTS_PER_HOUR,
+      ) * limitMultiplier,
+    );
+    const blockMaxRequestsPerDay = Math.ceil(
+      this.readIntConfig(
+        'BOT_BLOCK_MAX_REQUESTS_PER_DAY',
+        DEFAULT_BLOCK_MAX_REQUESTS_PER_DAY,
+      ) * limitMultiplier,
+    );
+
+    if (hourEvents > blockMaxRequestsPerHour) {
+      reasons.push('hard_sustained_volume_1h');
+    }
+    if (dayEvents > blockMaxRequestsPerDay) {
+      reasons.push('hard_sustained_volume_24h');
+    }
+
+    if (hourEvents > 2500) {
+      riskScore += 70;
+      reasons.push('extreme_hourly_volume');
+    } else if (hourEvents > 1000) {
+      riskScore += 45;
+      reasons.push('high_hourly_volume');
+    } else if (hourEvents > 400) {
+      riskScore += 25;
+      reasons.push('elevated_hourly_volume');
+    }
+
+    if (dayEvents > 10000) {
+      riskScore += 55;
+      reasons.push('extreme_daily_volume');
+    } else if (dayEvents > 5000) {
+      riskScore += 35;
+      reasons.push('high_daily_volume');
+    } else if (dayEvents > 2000) {
+      riskScore += 20;
+      reasons.push('elevated_daily_volume');
+    }
+
     if (minuteEvents > 120) {
       riskScore += 35;
       reasons.push('high_request_rate_1m');
@@ -883,6 +940,8 @@ export class TrafficEventsService {
       minuteEvents,
       minuteSearches,
       minuteContentViews,
+      hourEvents,
+      dayEvents,
       repeatedSearches,
       repeatedPathHits,
       uniquePaths10m,
@@ -1080,7 +1139,9 @@ export class TrafficEventsService {
     // kept behind fake 404s after deploy. New automatic blocks carry this reason.
     return (
       activeBlock.reasons.includes('hard_request_burst_30s') ||
-      activeBlock.reasons.includes('hard_search_burst_30s')
+      activeBlock.reasons.includes('hard_search_burst_30s') ||
+      activeBlock.reasons.includes('hard_sustained_volume_1h') ||
+      activeBlock.reasons.includes('hard_sustained_volume_24h')
     );
   }
 
