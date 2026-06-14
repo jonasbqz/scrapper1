@@ -103,29 +103,22 @@ export class ReadingHistoryService {
     const pageComics = groupedComics.slice(0, safeLimit);
     const comicIds = pageComics.map((c) => c.comicId);
 
-    let allEntries: Array<(typeof readingHistory.$inferSelect) & {
-      comic?: typeof schema.comics.$inferSelect | null;
-      chapter?: typeof schema.chapters.$inferSelect | null;
-    }> = [];
-
-    if (comicIds.length > 0) {
-      const perComicEntries = await mapWithConcurrency(
-        comicIds,
-        4,
-        (comicId) =>
-          this.db.query.readingHistory.findMany({
-            where: and(
-              eq(readingHistory.profileId, profileId),
-              eq(readingHistory.comicId, comicId),
-            ),
-            orderBy: [desc(readingHistory.readAt)],
-            limit: safeChaptersLimit,
-            with: READING_HISTORY_RELATIONS,
-          }),
-      );
-
-      allEntries = perComicEntries.flat();
-    }
+    const allEntries =
+      comicIds.length > 0
+        ? (
+            await mapWithConcurrency(comicIds, 4, (comicId) =>
+              this.db.query.readingHistory.findMany({
+                where: and(
+                  eq(readingHistory.profileId, profileId),
+                  eq(readingHistory.comicId, comicId),
+                ),
+                orderBy: [desc(readingHistory.readAt)],
+                limit: safeChaptersLimit,
+                with: READING_HISTORY_RELATIONS,
+              }),
+            )
+          ).flat()
+        : [];
 
     const entriesByComic = new Map<number, typeof allEntries>();
     for (const entry of allEntries) {
