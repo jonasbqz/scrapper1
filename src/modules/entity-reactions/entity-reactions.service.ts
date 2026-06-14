@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { DATABASE_CONNECTION } from '@/database/database.module';
 import {
   comics,
@@ -154,6 +154,10 @@ export class EntityReactionsService {
     const reactionType = this.assertReactionType(rawReactionType);
 
     return this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`${entityType}:${entityId}:${profileId}`}))`,
+      );
+
       const entity =
         entityType === 'comic'
           ? await tx.query.comics.findFirst({
@@ -196,12 +200,25 @@ export class EntityReactionsService {
           })
           .where(eq(entityReactions.id, existing.id));
       } else {
-        await tx.insert(entityReactions).values({
-          entityType,
-          entityId,
-          profileId,
-          reactionType: nextReaction!,
-        });
+        await tx
+          .insert(entityReactions)
+          .values({
+            entityType,
+            entityId,
+            profileId,
+            reactionType: nextReaction!,
+          })
+          .onConflictDoUpdate({
+            target: [
+              entityReactions.entityType,
+              entityReactions.entityId,
+              entityReactions.profileId,
+            ],
+            set: {
+              reactionType: nextReaction!,
+              updatedAt: new Date(),
+            },
+          });
       }
 
       const { summary, reactionsTotal } = this.getNextSummary(
