@@ -4,10 +4,10 @@
   "description": "MangaBiblioteca API - Backend for manga/comic library",
   "author": "MangaBiblioteca",
   "scripts": {
-    "build": "nest build",
+    "build": "nest build && bun scripts/build-engagement-script.ts",
     "start": "nest start",
     "start:dev": "nest start --watch",
-    "start:prod": "NODE_OPTIONS='--max-old-space-size=2048' bun scripts/apply-manual-migrations.ts && bun dist/src/main.js",
+    "start:prod": "bun scripts/apply-manual-migrations.ts && bun dist/src/main.js",
     "db:generate": "bun drizzle-kit generate",
     "db:migrate": "bun drizzle-kit migrate",
     "db:migrate:manual": "bun scripts/apply-manual-migrations.ts",

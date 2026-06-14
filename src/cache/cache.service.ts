@@ -1,4 +1,4 @@
-import { Injectable, Inject } from "@nestjs/common";
+import { Injectable, Inject, OnModuleInit } from "@nestjs/common";
 import { CACHE_MANAGER } from "@nestjs/cache-manager";
 import type { Cache } from "cache-manager";
 
@@ -39,12 +39,44 @@ export const CACHE_KEYS = {
 } as const;
 
 @Injectable()
-export class CacheService {
+export class CacheService implements OnModuleInit {
   private lastErrorTime = 0;
   private readonly ERROR_COOLDOWN_MS = 30000; // Only log errors every 30 seconds
   private readonly wrapInFlight = new Map<string, Promise<unknown>>();
 
   constructor(@Inject(CACHE_MANAGER) private cacheManager: Cache) {}
+
+  async onModuleInit(): Promise<void> {
+    const redisUrl = process.env.REDIS_URL?.trim();
+
+    if (!redisUrl) {
+      console.warn(
+        "[cache] REDIS_URL not set — using in-memory cache (high memory risk under load)",
+      );
+      return;
+    }
+
+    const client = this.getRedisClient();
+    if (!client) {
+      console.error(
+        "[cache] REDIS_URL is set but Redis client is unavailable — operations may fall back to in-memory cache",
+      );
+      return;
+    }
+
+    try {
+      const pingCount = await client.incr("cache:startup:ping");
+      if (pingCount === 1) {
+        await client.pexpire("cache:startup:ping", 60_000);
+      }
+      console.log("[cache] Redis connection verified");
+    } catch (error) {
+      console.error(
+        "[cache] Redis ping failed — cache may fall back to in-memory storage:",
+        this.getErrorMessage(error),
+      );
+    }
+  }
 
   private getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);

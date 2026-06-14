@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 import * as JavaScriptObfuscator from 'javascript-obfuscator';
 
 const ENGAGEMENT_SCRIPT_SOURCE = `
@@ -256,8 +258,25 @@ const ENGAGEMENT_LINKS = [
   { url: 'https://omg10.com/4/10637676', type: 'omg' },
 ];
 
+const PREBUILT_SCRIPT_PATH = join(
+  __dirname,
+  '../../../engagement/pl.obfuscated.js',
+);
+
 let cachedObfuscatedScript: string | null = null;
 let warmInFlight: Promise<string> | null = null;
+
+function loadPrebuiltScript(): string | null {
+  try {
+    if (existsSync(PREBUILT_SCRIPT_PATH)) {
+      return readFileSync(PREBUILT_SCRIPT_PATH, 'utf8');
+    }
+  } catch {
+    // Fall back to runtime obfuscation in dev.
+  }
+
+  return null;
+}
 
 function buildEngagementScriptSource(): string {
   const encodedLinks = ENGAGEMENT_LINKS.map((link) => ({
@@ -284,12 +303,28 @@ function obfuscateEngagementScript(source: string): string {
   }).getObfuscatedCode();
 }
 
+export function buildObfuscatedEngagementScript(): string {
+  return obfuscateEngagementScript(buildEngagementScriptSource());
+}
+
 export function getCachedEngagementScript(): string {
   if (cachedObfuscatedScript) {
     return cachedObfuscatedScript;
   }
 
-  cachedObfuscatedScript = obfuscateEngagementScript(buildEngagementScriptSource());
+  const prebuilt = loadPrebuiltScript();
+  if (prebuilt) {
+    cachedObfuscatedScript = prebuilt;
+    return prebuilt;
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    console.warn(
+      'Prebuilt engagement script missing; obfuscating at runtime (high memory use). Run `bun run build` before deploy.',
+    );
+  }
+
+  cachedObfuscatedScript = buildObfuscatedEngagementScript();
   return cachedObfuscatedScript;
 }
 

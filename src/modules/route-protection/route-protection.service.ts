@@ -9,6 +9,7 @@ import { routeProtectionCodes } from '@/database/schema';
 import type * as schema from '@/database/schema';
 
 const ROUTE_CODE_CACHE_TTL_MS = 16 * 60 * 60 * 1000;
+const MAX_PERSISTED_ENTITIES = 5_000;
 const UNAVAILABLE_MESSAGE =
   'No fue posible encontrar ese contenido ahora. Puedes volver y buscar otro contenido.';
 
@@ -328,6 +329,10 @@ export class RouteProtectionService {
     entityType: RouteEntityType,
     entityId: number,
   ): void {
+    if (this.persistedEntities.size >= MAX_PERSISTED_ENTITIES) {
+      this.persistedEntities.clear();
+    }
+
     this.persistedEntities.add(this.getEntityKey(entityType, entityId));
   }
 
