@@ -16,6 +16,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { auth } from './lib/auth';
 import { toNodeHandler } from 'better-auth/node';
 import { getRequestClientIp } from './common/network/client-ip';
+import { warmEngagementScriptCache } from './modules/engagement/engagement-script.cache';
 
 function parseJsonBody(body: Buffer, done: (error: Error | null, body?: unknown) => void) {
   const rawBody = body.toString('utf8').trim();
@@ -191,6 +192,11 @@ async function bootstrap() {
 
   const port = process.env.PORT || 8085;
   await app.listen(port, '0.0.0.0');
+  void warmEngagementScriptCache()
+    .then(() => console.log('Engagement ad script cache warmed'))
+    .catch((error) =>
+      console.warn('Engagement ad script warm-up failed:', error),
+    );
   console.log(`Server running on http://localhost:${port}`);
   if (process.env.NODE_ENV === 'development') {
     console.log(`Swagger docs: http://localhost:${port}/docs`);
