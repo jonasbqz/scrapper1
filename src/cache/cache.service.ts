@@ -38,6 +38,9 @@ export const CACHE_KEYS = {
 
   // Comments
   COMMENTS_COUNT: "comments:count",
+
+  // Notifications (PR-1 of bookmark-states-and-notifications change)
+  NOTIFICATIONS_UPDATES: "notifications:updates",
 } as const;
 
 @Injectable()

@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, mock } from 'bun:test';
 import { ReadingHistoryService } from './reading-history.service';
+import { CACHE_KEYS } from '@/cache/cache.service';
 
 function createMockDb() {
   const selectResult = [];
@@ -37,13 +38,21 @@ function createMockDb() {
   };
 }
 
+function createMockCache() {
+  return {
+    del: mock(async () => undefined),
+  };
+}
+
 describe('ReadingHistoryService', () => {
   let service;
   let db;
+  let cache;
 
   beforeEach(() => {
     db = createMockDb();
-    service = new ReadingHistoryService(db);
+    cache = createMockCache();
+    service = new ReadingHistoryService(db, cache);
   });
 
   const profileId = 'profile-1';
@@ -143,6 +152,26 @@ describe('ReadingHistoryService', () => {
       });
 
       expect(result.progressPercentage).toBe(0);
+    });
+
+    it("record() calls cacheService.del('notifications:updates:profileId') after a successful insert", async () => {
+      const newEntry = {
+        id: 'entry-new',
+        profileId,
+        comicId: 42,
+        chapterId: 10,
+        progressPercentage: 30,
+      };
+      db.insert.mockReturnValue({
+        values: mock(function () { return this; }),
+        onConflictDoUpdate: mock(function () { return this; }),
+        returning: mock(async () => [newEntry]),
+      });
+
+      await service.record(profileId, { comicId: 42, chapterId: 10, progressPercentage: 30 });
+
+      expect(cache.del).toHaveBeenCalledTimes(1);
+      expect(cache.del).toHaveBeenCalledWith(`${CACHE_KEYS.NOTIFICATIONS_UPDATES}:${profileId}`);
     });
   });
 

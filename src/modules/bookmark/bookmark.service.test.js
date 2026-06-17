@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, mock } from 'bun:test';
 import { BookmarkService } from './bookmark.service';
+import { CACHE_KEYS } from '@/cache/cache.service';
 
 function createMockDb() {
   return {
@@ -24,13 +25,21 @@ function createMockDb() {
   };
 }
 
+function createMockCache() {
+  return {
+    del: mock(async () => undefined),
+  };
+}
+
 describe('BookmarkService', () => {
   let service;
   let db;
+  let cache;
 
   beforeEach(() => {
     db = createMockDb();
-    service = new BookmarkService(db);
+    cache = createMockCache();
+    service = new BookmarkService(db, cache);
   });
 
   const profileId = 'profile-1';
@@ -121,6 +130,31 @@ describe('BookmarkService', () => {
 
       expect(result.status).toBe('plan_to_read');
     });
+
+    it("upsert with status='reading' calls cacheService.del('notifications:updates:profileId')", async () => {
+      db.query.bookmarks.findFirst.mockResolvedValue(null);
+      db.insert.mockReturnValue({
+        values: mock(function () { return this; }),
+        returning: mock(async () => [{ id: 5, profileId, comicId, status: 'reading', isFavorite: false }]),
+      });
+
+      await service.upsert(profileId, { comicId, status: 'reading' });
+
+      expect(cache.del).toHaveBeenCalledTimes(1);
+      expect(cache.del).toHaveBeenCalledWith(`${CACHE_KEYS.NOTIFICATIONS_UPDATES}:${profileId}`);
+    });
+
+    it('upsert with status=plan_to_read on a fresh bookmark does NOT call cacheService.del', async () => {
+      db.query.bookmarks.findFirst.mockResolvedValue(null);
+      db.insert.mockReturnValue({
+        values: mock(function () { return this; }),
+        returning: mock(async () => [{ id: 6, profileId, comicId, status: 'plan_to_read', isFavorite: false }]),
+      });
+
+      await service.upsert(profileId, { comicId, status: 'plan_to_read' });
+
+      expect(cache.del).not.toHaveBeenCalled();
+    });
   });
 
   describe('findAll', () => {
@@ -208,6 +242,64 @@ describe('BookmarkService', () => {
       await expect(
         service.update(profileId, 999, { status: 'completed' }),
       ).rejects.toThrow('Bookmark not found');
+    });
+
+    it("update with non-reading → reading calls cacheService.del('notifications:updates:profileId')", async () => {
+      const planBookmark = { ...existingBookmark, status: 'plan_to_read' };
+      db.query.bookmarks.findFirst.mockResolvedValue(planBookmark);
+      db.update.mockReturnValue({
+        set: mock(function () { return this; }),
+        where: mock(function () { return this; }),
+        returning: mock(async () => [{ ...planBookmark, status: 'reading' }]),
+      });
+
+      await service.update(profileId, comicId, { status: 'reading' });
+
+      expect(cache.del).toHaveBeenCalledTimes(1);
+      expect(cache.del).toHaveBeenCalledWith(`${CACHE_KEYS.NOTIFICATIONS_UPDATES}:${profileId}`);
+    });
+
+    it('update with reading → non-reading calls cacheService.del (out-of-reading transition)', async () => {
+      const readingBookmark = { ...existingBookmark, status: 'reading' };
+      db.query.bookmarks.findFirst.mockResolvedValue(readingBookmark);
+      db.update.mockReturnValue({
+        set: mock(function () { return this; }),
+        where: mock(function () { return this; }),
+        returning: mock(async () => [{ ...readingBookmark, status: 'completed' }]),
+      });
+
+      await service.update(profileId, comicId, { status: 'completed' });
+
+      expect(cache.del).toHaveBeenCalledTimes(1);
+      expect(cache.del).toHaveBeenCalledWith(`${CACHE_KEYS.NOTIFICATIONS_UPDATES}:${profileId}`);
+    });
+
+    it('update with non-reading → non-reading does NOT call cacheService.del', async () => {
+      const droppedBookmark = { ...existingBookmark, status: 'dropped' };
+      db.query.bookmarks.findFirst.mockResolvedValue(droppedBookmark);
+      db.update.mockReturnValue({
+        set: mock(function () { return this; }),
+        where: mock(function () { return this; }),
+        returning: mock(async () => [{ ...droppedBookmark, status: 'plan_to_read' }]),
+      });
+
+      await service.update(profileId, comicId, { status: 'plan_to_read' });
+
+      expect(cache.del).not.toHaveBeenCalled();
+    });
+
+    it('update with isFavorite only (no status) does NOT call cacheService.del', async () => {
+      const planBookmark = { ...existingBookmark, status: 'plan_to_read' };
+      db.query.bookmarks.findFirst.mockResolvedValue(planBookmark);
+      db.update.mockReturnValue({
+        set: mock(function () { return this; }),
+        where: mock(function () { return this; }),
+        returning: mock(async () => [{ ...planBookmark, isFavorite: true }]),
+      });
+
+      await service.update(profileId, comicId, { isFavorite: true });
+
+      expect(cache.del).not.toHaveBeenCalled();
     });
   });
 

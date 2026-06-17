@@ -6,6 +6,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
 import { mapWithConcurrency } from '@/lib/async';
 import { READING_HISTORY_RELATIONS } from '@/lib/list-relations';
+import { CacheService, CACHE_KEYS } from '@/cache/cache.service';
 import { RecordReadingDto } from './reading-history.dto';
 
 @Injectable()
@@ -13,6 +14,7 @@ export class ReadingHistoryService {
   constructor(
     @Inject(DATABASE_CONNECTION)
     private db: NodePgDatabase<typeof schema>,
+    private cacheService: CacheService,
   ) {}
 
   async record(profileId: string, dto: RecordReadingDto) {
@@ -45,6 +47,11 @@ export class ReadingHistoryService {
         },
       })
       .returning();
+
+    // Reading any chapter can move `lastRead` for that comic, which changes
+    // the notifications feed. `CacheService.del` swallows errors internally,
+    // so a flaky cache will not block the 201 response.
+    await this.cacheService.del(`${CACHE_KEYS.NOTIFICATIONS_UPDATES}:${profileId}`);
 
     return entry;
   }

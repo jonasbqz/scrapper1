@@ -9,6 +9,7 @@ import { ComicModule } from './modules/comic/comic.module';
 import { ChapterModule } from './modules/chapter/chapter.module';
 import { BookmarkModule } from './modules/bookmark/bookmark.module';
 import { ReadingHistoryModule } from './modules/reading-history/reading-history.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 import { LikesModule } from './modules/likes/likes.module';
 import { ChapterLikesModule } from './modules/chapter-likes/chapter-likes.module';
 import { CommentsModule } from './modules/comments/comments.module';
@@ -37,6 +38,7 @@ import { TrafficEventsModule } from './modules/traffic/traffic-events.module';
     ChapterModule,
     BookmarkModule,
     ReadingHistoryModule,
+    NotificationsModule,
     LikesModule,
     ChapterLikesModule,
     CommentsModule,
