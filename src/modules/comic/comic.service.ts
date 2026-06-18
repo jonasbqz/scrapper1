@@ -70,7 +70,7 @@ export class ComicService {
     T extends { id: number; slug: string; protectedRouteEnabled?: boolean | null },
   >(
     comic: T,
-    recentChapters: Array<{ id: number; [key: string]: any }>,
+    recentChapters: Array<{ id: number; slug: string; [key: string]: any }>,
     options?: { comicPath?: string },
   ) {
     const comicPath =
@@ -111,41 +111,15 @@ export class ComicService {
   }
 
   async resolveComicRouteSegment(segment: string) {
-    const exactComic = await this.db.query.comics.findFirst({
+    const comic = await this.db.query.comics.findFirst({
       where: eq(comics.slug, segment),
     });
 
-    if (exactComic) {
-      if (exactComic.protectedRouteEnabled) {
-        throw this.routeProtectionService.createUnavailableException();
-      }
-
-      return exactComic;
-    }
-
-    const parsed = this.routeProtectionService.parseComicSegment(segment);
-    if (!parsed.hasCode || !parsed.slug) {
+    if (!comic) {
       throw new NotFoundException('Comic not found');
     }
 
-    const protectedComic = await this.db.query.comics.findFirst({
-      where: eq(comics.slug, parsed.slug),
-    });
-
-    if (!protectedComic) {
-      throw new NotFoundException('Comic not found');
-    }
-
-    if (!protectedComic.protectedRouteEnabled) {
-      throw new NotFoundException('Comic not found');
-    }
-
-    const currentCode = await this.routeProtectionService.getComicCode(protectedComic.id);
-    if (parsed.code !== currentCode) {
-      throw this.routeProtectionService.createUnavailableException();
-    }
-
-    return protectedComic;
+    return comic;
   }
 
   async findPublicByRouteSegment(segment: string) {
@@ -454,6 +428,7 @@ export class ComicService {
           scan_group_name: mainScan?.scanGroup?.name || 'Unknown',
           recent_chapters: await this.buildRecentChapterSummaries(comic, recentChapters.map((ch: any) => ({
             id: ch.id,
+            slug: ch.slug,
             chapter_number: String(ch.chapter_number),
             title: ch.title || `Capítulo ${ch.chapter_number}`,
             created_at: ch.created_at,
@@ -787,6 +762,7 @@ export class ComicService {
             scan.comic,
             chaps.map((ch) => ({
               id: ch.id,
+              slug: ch.slug,
               chapter_number: String(ch.chapter_number),
               title: ch.title || `Capítulo ${ch.chapter_number}`,
               created_at: ch.created_at,

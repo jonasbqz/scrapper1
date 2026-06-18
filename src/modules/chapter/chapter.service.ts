@@ -1,7 +1,7 @@
 import { Injectable, Inject, NotFoundException } from '@nestjs/common';
-import { eq, desc, sql, and, gt, lt, gte } from 'drizzle-orm';
+import { eq, desc, sql, and, gt, lt, gte, inArray } from 'drizzle-orm';
 import { DATABASE_CONNECTION } from '@/database/database.module';
-import { chapters } from '@/database/schema';
+import { chapters, comicScans, comics } from '@/database/schema';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
 import { CacheService, CACHE_TTL, CACHE_KEYS } from '@/cache/cache.service';
@@ -26,6 +26,30 @@ export class ChapterService {
 
     const parsedComic = this.routeProtectionService.parseComicSegment(comicSegment);
     return parsedComic.slug === comic.slug;
+  }
+
+  async findChapterBySlugInComic(comicId: number, chapterSlug: string) {
+    const scanRows = await this.db
+      .select({ id: comicScans.id })
+      .from(comicScans)
+      .where(eq(comicScans.comicId, comicId));
+    const scanIds = scanRows.map((row) => row.id);
+    if (scanIds.length === 0) {
+      return null;
+    }
+
+    const chapterRows = await this.db
+      .select()
+      .from(chapters)
+      .where(
+        and(
+          inArray(chapters.comicScanId, scanIds),
+          eq(chapters.slug, chapterSlug),
+        ),
+      )
+      .orderBy(desc(chapters.id))
+      .limit(1);
+    return chapterRows[0] ?? null;
   }
 
   async findByComicScan(comicScanId: number) {
@@ -122,38 +146,58 @@ export class ChapterService {
   async findPublicByRouteSegments(comicSegment: string, chapterSegment: string) {
     const parsedChapter = this.routeProtectionService.parseChapterSegment(chapterSegment);
 
-    if (!parsedChapter.chapterId) {
+    if (!parsedChapter.chapterSlug) {
       throw new NotFoundException('Chapter not found');
     }
 
-    const navigation = await this.getNavigation(parsedChapter.chapterId);
-    const comic = navigation.current.comicScan?.comic;
+    const parsedComic = this.routeProtectionService.parseComicSegment(comicSegment);
+    const comic = await this.db.query.comics.findFirst({
+      where: eq(comics.slug, parsedComic.slug),
+    });
 
-    if (!comic?.id) {
-      throw this.routeProtectionService.createUnavailableException();
-    }
-
-    if (!this.matchesComicSegment(comicSegment, comic)) {
-      throw this.routeProtectionService.createUnavailableException();
+    if (!comic) {
+      throw new NotFoundException('Comic not found');
     }
 
     if (comic.protectedRouteEnabled) {
-      if (!parsedChapter.hasCode || !parsedChapter.code) {
+      if (!parsedChapter.hasRandom || !parsedChapter.random) {
         throw this.routeProtectionService.createUnavailableException();
       }
 
-      const currentCode = await this.routeProtectionService.getChapterCode(navigation.current.id);
-      if (parsedChapter.code !== currentCode) {
+      const chapter = await this.findChapterBySlugInComic(
+        comic.id,
+        parsedChapter.chapterSlug,
+      );
+      if (!chapter) {
         throw this.routeProtectionService.createUnavailableException();
       }
-    } else if (parsedChapter.hasCode) {
+
+      const isValidRandom = await this.routeProtectionService.validateChapterRandom(
+        chapter.id,
+        parsedChapter.random,
+      );
+      if (!isValidRandom) {
+        throw this.routeProtectionService.createUnavailableException();
+      }
+
+      const navigation = await this.getNavigation(chapter.id);
+      return { comic, navigation };
+    }
+
+    if (parsedChapter.hasRandom) {
       throw new NotFoundException('Chapter not found');
     }
 
-    return {
-      comic,
-      navigation,
-    };
+    const chapter = await this.findChapterBySlugInComic(
+      comic.id,
+      parsedChapter.chapterSlug,
+    );
+    if (!chapter) {
+      throw new NotFoundException('Chapter not found');
+    }
+
+    const navigation = await this.getNavigation(chapter.id);
+    return { comic, navigation };
   }
 
   async incrementViews(id: number) {

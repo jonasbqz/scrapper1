@@ -8,6 +8,7 @@ type ComicShape = {
 
 type ChapterShape = {
   id: number;
+  slug: string;
 };
 
 type EntryWithRelations = {

@@ -584,7 +584,7 @@ export class CommentsService {
       slug: string;
       protectedRouteEnabled?: boolean | null;
     } | null;
-    chapter?: { id: number } | null;
+    chapter?: { id: number; slug: string } | null;
   }) {
     if (!comment.comic) {
       return { comicPath: null, chapterPath: null };

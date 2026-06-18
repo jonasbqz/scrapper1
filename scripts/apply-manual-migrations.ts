@@ -23,6 +23,7 @@ const MANUAL_MIGRATIONS = [
   '0016_route_protection_codes.sql',
   '0016_traffic_suspicious_query_idx.sql',
   '0017_ensure_runtime_schema.sql',
+  '0018_drop_route_protection_codes.sql',
 ] as const;
 
 function sleep(ms: number): Promise<void> {

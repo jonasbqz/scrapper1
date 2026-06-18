@@ -1,37 +1,43 @@
-import { Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Inject, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, eq, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { randomInt } from 'crypto';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { CacheService } from '@/cache/cache.service';
 import { DATABASE_CONNECTION } from '@/database/database.module';
-import { routeProtectionCodes } from '@/database/schema';
+import { comics } from '@/database/schema';
 import type * as schema from '@/database/schema';
 
-const ROUTE_CODE_CACHE_TTL_MS = 16 * 60 * 60 * 1000;
-const MAX_PERSISTED_ENTITIES = 5_000;
+const CHAPTER_RANDOM_TTL_MS = 3 * 24 * 60 * 60 * 1000;
+const COMIC_SLUG_ROTATION_CRON = '0 0 */3 * *';
+const COMIC_SLUG_PREFIX_DIGITS = 3;
+const COMIC_SLUG_SUFFIX_DIGITS = 4;
+const COMIC_SLUG_RANDOM_MAX_ATTEMPTS = 10;
+const CHAPTER_SEGMENT_PREFIX = '90-';
+const CHAPTER_SEGMENT_RANDOM_DIGITS = 7;
 const UNAVAILABLE_MESSAGE =
   'No fue posible encontrar ese contenido ahora. Puedes volver y buscar otro contenido.';
-
-type RouteEntityType = 'comic' | 'chapter';
-
-type HeadersLike = Headers | Record<string, unknown> | undefined;
 
 interface ProtectedComicShape {
   id: number;
   slug: string;
+  title?: string | null;
   protectedRouteEnabled?: boolean | null;
 }
 
 interface ProtectedChapterShape {
   id: number;
+  slug: string;
+  comicId?: number;
 }
+
+type HeadersLike = Headers | Record<string, unknown> | undefined;
 
 @Injectable()
 export class RouteProtectionService {
-  private readonly persistedEntities = new Set<string>();
-  private readonly codePromises = new Map<string, Promise<string>>();
-  private readonly persistPromises = new Map<string, Promise<void>>();
+  private readonly logger = new Logger(RouteProtectionService.name);
+  private readonly comicRotationLocks = new Map<number, Promise<string>>();
 
   constructor(
     private readonly cacheService: CacheService,
@@ -59,97 +65,6 @@ export class RouteProtectionService {
     return new ServiceUnavailableException(UNAVAILABLE_MESSAGE);
   }
 
-  parseComicSegment(segment: string): {
-    slug: string;
-    code: string | null;
-    hasCode: boolean;
-  } {
-    const match = segment.match(/^(.*)-(\d{6})$/);
-    if (!match || !match[1]) {
-      return {
-        slug: segment,
-        code: null,
-        hasCode: false,
-      };
-    }
-
-    return {
-      slug: match[1],
-      code: match[2],
-      hasCode: true,
-    };
-  }
-
-  parseChapterSegment(segment: string): {
-    chapterId: number | null;
-    code: string | null;
-    hasCode: boolean;
-  } {
-    if (/^\d+$/.test(segment)) {
-      return {
-        chapterId: Number(segment),
-        code: null,
-        hasCode: false,
-      };
-    }
-
-    const match = segment.match(/^(\d+)-(\d{6})$/);
-    if (!match) {
-      return {
-        chapterId: null,
-        code: null,
-        hasCode: false,
-      };
-    }
-
-    return {
-      chapterId: Number(match[1]),
-      code: match[2],
-      hasCode: true,
-    };
-  }
-
-  async getComicCode(comicId: number): Promise<string> {
-    return this.getOrCreateCode('comic', comicId);
-  }
-
-  async getChapterCode(chapterId: number): Promise<string> {
-    return this.getOrCreateCode('chapter', chapterId);
-  }
-
-  async rotateComicCode(comicId: number): Promise<string> {
-    return this.rotateCode('comic', comicId);
-  }
-
-  async rotateChapterCode(chapterId: number): Promise<string> {
-    return this.rotateCode('chapter', chapterId);
-  }
-
-  async getComicPath(comic: ProtectedComicShape): Promise<string> {
-    const basePath = `/comics/${comic.slug}`;
-    if (!this.isProtected(comic)) {
-      return basePath;
-    }
-
-    const code = await this.getComicCode(comic.id);
-    return `${basePath}-${code}`;
-  }
-
-  async getChapterPath(
-    comic: ProtectedComicShape,
-    chapter: ProtectedChapterShape,
-    options?: { comicPath?: string },
-  ): Promise<string> {
-    const comicPath = options?.comicPath || await this.getComicPath(comic);
-
-    if (!this.isProtected(comic)) {
-      return `${comicPath}/chapters/${chapter.id}`;
-    }
-
-    const code = await this.getChapterCode(chapter.id);
-    return `${comicPath}/chapters/${chapter.id}-${code}`;
-  }
-
   async assertLegacyAccess(
     comic: ProtectedComicShape | null | undefined,
     headers: HeadersLike,
@@ -159,181 +74,222 @@ export class RouteProtectionService {
     }
   }
 
-  private async getOrCreateCode(
-    entityType: RouteEntityType,
-    entityId: number,
+  parseComicSegment(segment: string): {
+    slug: string;
+    hasCode: boolean;
+  } {
+    if (this.looksLikeProtectedComicSlug(segment)) {
+      return { slug: segment, hasCode: true };
+    }
+    return { slug: segment, hasCode: false };
+  }
+
+  parseChapterSegment(segment: string): {
+    chapterSlug: string;
+    random: string | null;
+    hasRandom: boolean;
+  } {
+    if (!segment.startsWith(CHAPTER_SEGMENT_PREFIX)) {
+      return { chapterSlug: segment, random: null, hasRandom: false };
+    }
+
+    const remainder = segment.slice(CHAPTER_SEGMENT_PREFIX.length);
+    const lastDashIndex = remainder.lastIndexOf('-');
+    if (lastDashIndex === -1) {
+      return { chapterSlug: remainder, random: null, hasRandom: false };
+    }
+
+    const candidateRandom = remainder.slice(lastDashIndex + 1);
+    if (!/^\d+$/.test(candidateRandom)) {
+      return { chapterSlug: segment, random: null, hasRandom: false };
+    }
+
+    const expectedLength = COMIC_SLUG_PREFIX_DIGITS + COMIC_SLUG_SUFFIX_DIGITS;
+    if (candidateRandom.length !== expectedLength) {
+      return { chapterSlug: remainder, random: null, hasRandom: false };
+    }
+
+    const chapterSlug = remainder.slice(0, lastDashIndex);
+    if (!chapterSlug) {
+      return { chapterSlug: segment, random: null, hasRandom: false };
+    }
+
+    return { chapterSlug, random: candidateRandom, hasRandom: true };
+  }
+
+  async getComicPath(comic: ProtectedComicShape): Promise<string> {
+    return comic.slug;
+  }
+
+  async getChapterPath(
+    comic: ProtectedComicShape,
+    chapter: ProtectedChapterShape,
+    options?: { comicPath?: string },
   ): Promise<string> {
-    const entityKey = this.getEntityKey(entityType, entityId);
-    const inFlight = this.codePromises.get(entityKey);
+    const comicPath = options?.comicPath || (await this.getComicPath(comic));
+    const basePath = `${comicPath}/chapters/${CHAPTER_SEGMENT_PREFIX}${chapter.slug}`;
+
+    if (!this.isProtected(comic)) {
+      return basePath;
+    }
+
+    const random = await this.getOrCreateChapterRandom(chapter.id);
+    return `${basePath}-${random}`;
+  }
+
+  async validateChapterRandom(
+    chapterId: number,
+    random: string,
+  ): Promise<boolean> {
+    const cached = await this.cacheService.get<string>(
+      this.getChapterRandomCacheKey(chapterId),
+    );
+    if (cached && cached === random) {
+      return true;
+    }
+    const fallback = await this.getOrCreateChapterRandom(chapterId);
+    return fallback === random;
+  }
+
+  async getOrCreateChapterRandom(chapterId: number): Promise<string> {
+    const cacheKey = this.getChapterRandomCacheKey(chapterId);
+    const cached = await this.cacheService.get<string>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const fresh = this.generateChapterRandom();
+    await this.cacheService.set(cacheKey, fresh, CHAPTER_RANDOM_TTL_MS);
+    return fresh;
+  }
+
+  @Cron(COMIC_SLUG_ROTATION_CRON)
+  async rotateAllProtectedComicSlugs(): Promise<number> {
+    const protectedComics = await this.db
+      .select({ id: comics.id, slug: comics.slug, title: comics.title })
+      .from(comics)
+      .where(eq(comics.protectedRouteEnabled, true));
+
+    let rotated = 0;
+    for (const comic of protectedComics) {
+      const titleSlug = this.extractTitleSlug(comic.slug, comic.title);
+      const next = await this.rotateProtectedComicSlug(comic.id, titleSlug);
+      if (next !== comic.slug) {
+        rotated += 1;
+      }
+    }
+
+    if (rotated > 0) {
+      this.logger.log(
+        `[route-protection] Rotated ${rotated} protected comic slug${rotated === 1 ? '' : 's'}.`,
+      );
+    }
+    return rotated;
+  }
+
+  async rotateProtectedComicSlug(
+    comicId: number,
+    titleSlug: string,
+  ): Promise<string> {
+    const inFlight = this.comicRotationLocks.get(comicId);
     if (inFlight) {
       return inFlight;
     }
 
-    const promise = this.resolveOrCreateCode(entityType, entityId).finally(() => {
-      this.codePromises.delete(entityKey);
+    const promise = (async () => {
+      const next = await this.generateUniqueComicSlug(titleSlug);
+      await this.db
+        .update(comics)
+        .set({ slug: next, updatedAt: sql`now()` })
+        .where(eq(comics.id, comicId));
+      return next;
+    })().finally(() => {
+      this.comicRotationLocks.delete(comicId);
     });
-    this.codePromises.set(entityKey, promise);
+
+    this.comicRotationLocks.set(comicId, promise);
     return promise;
   }
 
-  private async resolveOrCreateCode(
-    entityType: RouteEntityType,
-    entityId: number,
-  ): Promise<string> {
-    const cacheKey = this.getCacheKey(entityType, entityId);
-
-    const cached = await this.cacheService.get<string>(cacheKey);
-    if (this.isValidCode(cached)) {
-      await this.ensurePersistedOnce(entityType, entityId, cached);
-      return cached;
-    }
-
-    const persisted = await this.readPersistedCode(entityType, entityId);
-    if (this.isValidCode(persisted)) {
-      this.markEntityPersisted(entityType, entityId);
-      await this.cacheService.set(cacheKey, persisted, ROUTE_CODE_CACHE_TTL_MS);
-      return persisted;
-    }
-
-    const code = this.generateCode();
-    const stored = await this.insertPersistedCode(entityType, entityId, code);
-    this.markEntityPersisted(entityType, entityId);
-    await this.cacheService.set(cacheKey, stored, ROUTE_CODE_CACHE_TTL_MS);
-    return stored;
-  }
-
-  private async rotateCode(
-    entityType: RouteEntityType,
-    entityId: number,
-  ): Promise<string> {
-    const code = this.generateCode();
-    const cacheKey = this.getCacheKey(entityType, entityId);
-
-    await this.db
-      .insert(routeProtectionCodes)
-      .values({
-        entityType,
-        entityId,
-        code,
-      })
-      .onConflictDoUpdate({
-        target: [routeProtectionCodes.entityType, routeProtectionCodes.entityId],
-        set: {
-          code,
-          updatedAt: sql`now()`,
-        },
-      });
-
-    await this.cacheService.set(cacheKey, code, ROUTE_CODE_CACHE_TTL_MS);
-    this.markEntityPersisted(entityType, entityId);
-    return code;
-  }
-
-  private async ensurePersistedOnce(
-    entityType: RouteEntityType,
-    entityId: number,
-    code: string,
-  ): Promise<void> {
-    if (!this.isValidCode(code)) {
-      return;
-    }
-
-    const entityKey = this.getEntityKey(entityType, entityId);
-    if (this.persistedEntities.has(entityKey)) {
-      return;
-    }
-
-    const inFlight = this.persistPromises.get(entityKey);
-    if (inFlight) {
-      await inFlight;
-      return;
-    }
-
-    const promise = (async () => {
-      const existing = await this.readPersistedCode(entityType, entityId);
-      if (!this.isValidCode(existing)) {
-        await this.insertPersistedCode(entityType, entityId, code);
+  async generateUniqueComicSlug(titleSlug: string): Promise<string> {
+    for (let attempt = 0; attempt < COMIC_SLUG_RANDOM_MAX_ATTEMPTS; attempt += 1) {
+      const candidate = `${this.generateComicSlugPrefix()}${titleSlug}${this.generateComicSlugSuffix()}`;
+      const collision = await this.db
+        .select({ id: comics.id })
+        .from(comics)
+        .where(eq(comics.slug, candidate))
+        .limit(1);
+      if (collision.length === 0) {
+        return candidate;
       }
-      this.markEntityPersisted(entityType, entityId);
-    })().finally(() => {
-      this.persistPromises.delete(entityKey);
-    });
-
-    this.persistPromises.set(entityKey, promise);
-    await promise;
-  }
-
-  private async readPersistedCode(
-    entityType: RouteEntityType,
-    entityId: number,
-  ): Promise<string | null> {
-    const [row] = await this.db
-      .select({ code: routeProtectionCodes.code })
-      .from(routeProtectionCodes)
-      .where(
-        and(
-          eq(routeProtectionCodes.entityType, entityType),
-          eq(routeProtectionCodes.entityId, entityId),
-        ),
-      )
-      .limit(1);
-
-    return row?.code ?? null;
-  }
-
-  private async insertPersistedCode(
-    entityType: RouteEntityType,
-    entityId: number,
-    code: string,
-  ): Promise<string> {
-    const result = await this.db.execute(sql`
-      insert into route_protection_codes (entity_type, entity_id, code)
-      values (${entityType}, ${entityId}, ${code})
-      on conflict (entity_type, entity_id) do update
-        set code = route_protection_codes.code
-      returning code as "code"
-    `);
-
-    const [row] = Array.isArray(result)
-      ? result
-      : ((result as { rows?: Array<{ code?: string }> }).rows ?? []);
-    if (this.isValidCode(row?.code)) {
-      return row.code;
     }
+    throw new Error(
+      `Failed to generate a unique protected comic slug for "${titleSlug}" after ${COMIC_SLUG_RANDOM_MAX_ATTEMPTS} attempts`,
+    );
+  }
 
-    const existing = await this.readPersistedCode(entityType, entityId);
-    if (this.isValidCode(existing)) {
-      return existing;
+  extractTitleSlug(slug: string, title?: string | null): string {
+    const stripped = this.stripProtectedDecorations(slug);
+    if (stripped) {
+      return stripped;
     }
-
-    return code;
-  }
-
-  private isValidCode(value: string | null | undefined): value is string {
-    return typeof value === 'string' && /^\d{6}$/.test(value);
-  }
-
-  private generateCode(): string {
-    return randomInt(100000, 1000000).toString();
-  }
-
-  private getCacheKey(entityType: RouteEntityType, entityId: number): string {
-    return `route:${entityType}:${entityId}`;
-  }
-
-  private getEntityKey(entityType: RouteEntityType, entityId: number): string {
-    return `${entityType}:${entityId}`;
-  }
-
-  private markEntityPersisted(
-    entityType: RouteEntityType,
-    entityId: number,
-  ): void {
-    if (this.persistedEntities.size >= MAX_PERSISTED_ENTITIES) {
-      this.persistedEntities.clear();
+    if (title) {
+      return this.slugifyTitle(title);
     }
+    return stripped || 'comic';
+  }
 
-    this.persistedEntities.add(this.getEntityKey(entityType, entityId));
+  private stripProtectedDecorations(slug: string): string {
+    if (!this.looksLikeProtectedComicSlug(slug)) {
+      return slug;
+    }
+    const start = COMIC_SLUG_PREFIX_DIGITS;
+    const end = slug.length - COMIC_SLUG_SUFFIX_DIGITS;
+    if (end <= start) {
+      return '';
+    }
+    return slug.slice(start, end);
+  }
+
+  private looksLikeProtectedComicSlug(slug: string): boolean {
+    if (slug.length < COMIC_SLUG_PREFIX_DIGITS + COMIC_SLUG_SUFFIX_DIGITS) {
+      return false;
+    }
+    const start = slug.slice(0, COMIC_SLUG_PREFIX_DIGITS);
+    const end = slug.slice(slug.length - COMIC_SLUG_SUFFIX_DIGITS);
+    return /^\d+$/.test(start) && /^\d+$/.test(end);
+  }
+
+  private slugifyTitle(title: string): string {
+    return title
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 240);
+  }
+
+  private generateComicSlugPrefix(): string {
+    const max = 10 ** COMIC_SLUG_PREFIX_DIGITS;
+    const min = 10 ** (COMIC_SLUG_PREFIX_DIGITS - 1);
+    return randomInt(min, max).toString();
+  }
+
+  private generateComicSlugSuffix(): string {
+    const max = 10 ** COMIC_SLUG_SUFFIX_DIGITS;
+    const min = 10 ** (COMIC_SLUG_SUFFIX_DIGITS - 1);
+    return randomInt(min, max).toString();
+  }
+
+  private generateChapterRandom(): string {
+    const total = COMIC_SLUG_PREFIX_DIGITS + COMIC_SLUG_SUFFIX_DIGITS;
+    const max = 10 ** total;
+    const min = 10 ** (total - 1);
+    return randomInt(min, max).toString();
+  }
+
+  private getChapterRandomCacheKey(chapterId: number): string {
+    return `route:chapter:random:${chapterId}`;
   }
 
   private getHeaderValue(headers: HeadersLike, name: string): string {

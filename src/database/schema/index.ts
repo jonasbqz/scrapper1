@@ -432,17 +432,6 @@ export const comicViewsHistory = pgTable('comic_views_history', {
   dateIdx: index('comic_views_history_date_idx').on(table.date),
 }));
 
-export const routeProtectionCodes = pgTable('route_protection_codes', {
-  entityType: varchar('entity_type', { length: 16 }).notNull(),
-  entityId: integer('entity_id').notNull(),
-  code: varchar('code', { length: 6 }).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-}, (table) => ({
-  pk: primaryKey({ columns: [table.entityType, table.entityId] }),
-  lookupIdx: index('route_protection_codes_lookup_idx').on(table.entityType, table.code),
-}));
-
 // Relations
 export const profilesRelations = relations(profiles, ({ many }) => ({
   bookmarks: many(bookmarks),
