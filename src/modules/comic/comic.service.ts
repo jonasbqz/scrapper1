@@ -399,8 +399,8 @@ export class ComicService {
 
     if (comicScanIds.length > 0) {
       const chaptersResult = await this.db.execute(sql`
-        SELECT id, comic_scan_id, chapter_number, title, created_at FROM (
-          SELECT id, comic_scan_id, chapter_number, title, created_at,
+        SELECT id, comic_scan_id, chapter_number, title, slug, created_at FROM (
+          SELECT id, comic_scan_id, chapter_number, title, slug, created_at,
             ROW_NUMBER() OVER (PARTITION BY comic_scan_id ORDER BY created_at DESC) as rn
           FROM chapters
           WHERE comic_scan_id IN (${sql.join(comicScanIds.map(id => sql`${id}`), sql`, `)})
@@ -711,8 +711,8 @@ export class ComicService {
 
     // Step 3: Get top 2 chapters per comic_scan (window function)
     const chaptersResult = await this.db.execute(sql`
-      SELECT id, comic_scan_id, chapter_number, title, created_at FROM (
-        SELECT id, comic_scan_id, chapter_number, title, created_at,
+      SELECT id, comic_scan_id, chapter_number, title, slug, created_at FROM (
+        SELECT id, comic_scan_id, chapter_number, title, slug, created_at,
           ROW_NUMBER() OVER (PARTITION BY comic_scan_id ORDER BY created_at DESC) as rn
         FROM chapters
         WHERE comic_scan_id IN (${sql.join(scanIds.map(id => sql`${id}`), sql`, `)})

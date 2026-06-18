@@ -282,7 +282,7 @@ describe('RouteProtectionService', () => {
   });
 
   describe('getComicPath', () => {
-    it('returns the comic slug directly (random is baked into the slug)', async () => {
+    it('returns the full /comics/<slug> path (random is baked into the slug)', async () => {
       const service = new RouteProtectionService(
         { get: async () => undefined, set: async () => {}, del: async () => {} },
         { get: () => undefined },
@@ -293,7 +293,7 @@ describe('RouteProtectionService', () => {
         slug: '133naruto2125',
         protectedRouteEnabled: true,
       });
-      expect(path).toBe('133naruto2125');
+      expect(path).toBe('/comics/133naruto2125');
     });
   });
 

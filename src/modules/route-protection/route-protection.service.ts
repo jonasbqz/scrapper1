@@ -118,7 +118,7 @@ export class RouteProtectionService {
   }
 
   async getComicPath(comic: ProtectedComicShape): Promise<string> {
-    return comic.slug;
+    return `/comics/${comic.slug}`;
   }
 
   async getChapterPath(
