@@ -21,6 +21,7 @@ interface UnreadCteRow {
   new_chapters_count: number;
   latest_chapter_published_at: Date | string;
   first_unread_chapter_id: number | null;
+  total_count: string;
 }
 
 /**
@@ -124,14 +125,15 @@ export class NotificationsService {
              max(u.chapter_number)        AS latest_chapter,
              count(*)                      AS new_chapters_count,
              max(u.release_date)           AS latest_chapter_published_at,
-             (
-               SELECT id FROM unread u2
-               WHERE u2.comic_id = cs.comic_id
-               -- TIEBREAK: lowest chapterNumber, then lowest chapters.id.
-               -- Must match design §2 and the spec "Multi-scan tiebreak" scenario.
-               ORDER BY u2.chapter_number ASC, u2.id ASC
-               LIMIT 1
-             ) AS first_unread_chapter_id
+            (
+              SELECT id FROM unread u2
+              WHERE u2.comic_id = cs.comic_id
+              -- TIEBREAK: lowest chapterNumber, then lowest chapters.id.
+              -- Must match design §2 and the spec "Multi-scan tiebreak" scenario.
+              ORDER BY u2.chapter_number ASC, u2.id ASC
+              LIMIT 1
+            ) AS first_unread_chapter_id,
+            (SELECT count(distinct u2.comic_id) FROM unread u2) AS total_count
       FROM unread u
       JOIN comic_scans cs ON cs.id = u.comic_scan_id
       JOIN comics co      ON co.id = cs.comic_id
@@ -143,14 +145,10 @@ export class NotificationsService {
 
     const rows = (result.rows ?? []) as UnreadCteRow[];
     const items = rows.map((row) => this.mapRowToItem(row));
+    const total = Number(rows[0]?.total_count ?? 0);
+    const hasMore = total > items.length;
 
-    return {
-      items,
-      total: items.length,
-      hasMore: false, // The LIMIT 50 already truncates; we accept the truncation
-                       // as the authoritative "no more" boundary because computing
-                       // a separate count(*) per-call would add a round trip.
-    };
+    return { items, total, hasMore };
   }
 
   private mapRowToItem(row: UnreadCteRow): NotificationItemDto {

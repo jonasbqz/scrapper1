@@ -70,6 +70,7 @@ describe('NotificationsService', () => {
         new_chapters_count: 5,
         latest_chapter_published_at: new Date('2025-06-10T00:00:00Z'),
         first_unread_chapter_id: 11,
+        total_count: '1',
       });
       db.execute.mockResolvedValueOnce({ rows: [row] });
 
