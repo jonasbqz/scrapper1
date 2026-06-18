@@ -32,6 +32,7 @@ function rowFixture(overrides = {}) {
     new_chapters_count: 1,
     latest_chapter_published_at: new Date('2025-06-15T00:00:00Z'),
     first_unread_chapter_id: 11,
+    total_count: '0',
     ...overrides,
   };
 }
@@ -185,6 +186,7 @@ describe('NotificationsService', () => {
           comic_id: i + 1,
           slug: `comic-${i + 1}`,
           latest_chapter_published_at: new Date(2025, 5, 15, 0, 0, i),
+          total_count: '75',
         }),
       );
       db.execute.mockResolvedValueOnce({ rows });
@@ -192,8 +194,36 @@ describe('NotificationsService', () => {
       const result = await service.findUpdates(profileId);
 
       expect(result.items).toHaveLength(50);
-      expect(result.total).toBe(50);
+      expect(result.total).toBe(75);
+      expect(result.hasMore).toBe(true);
+    });
+
+    it('boundary: count exactly equals items.length sets hasMore to false (strict >)', async () => {
+      const rows = Array.from({ length: 10 }, (_, i) =>
+        rowFixture({
+          comic_id: i + 1,
+          slug: `comic-${i + 1}`,
+          total_count: '10',
+        }),
+      );
+      db.execute.mockResolvedValueOnce({ rows });
+
+      const result = await service.findUpdates(profileId);
+
+      expect(result.items).toHaveLength(10);
+      expect(result.total).toBe(10);
       expect(result.hasMore).toBe(false);
+    });
+
+    it('counts via the unread CTE (NOT reading_bookmarks) — wrong-CTE regression pin', async () => {
+      db.execute.mockResolvedValueOnce({ rows: [] });
+      await service.findUpdates(profileId);
+
+      const sqlArg = db.execute.mock.calls[0][0];
+      const sqlString = flattenDrizzleSql(sqlArg);
+
+      expect(sqlString).toMatch(/count\s*\(\s*distinct\s+\w+\.comic_id\s*\)\s+from\s+unread/i);
+      expect(sqlString).not.toMatch(/count\s*\(\s*\*\s*\)\s+from\s+reading_bookmarks/i);
     });
 
     it('cache hit: second call within 1h does not hit DB (db.execute called once)', async () => {
@@ -297,3 +327,16 @@ describe('NotificationsService', () => {
     });
   });
 });
+
+// Drizzle 0.45.2 SQL: walks queryChunks recursively, stringifying
+// StringChunk/Param/Name/SQL.Aliased into a flat string for regex assertions.
+// Version-isolated: ~10 lines; if Drizzle 0.46+ changes the API this fails loudly.
+function flattenDrizzleSql(node) {
+  if (node == null) return '';
+  if (typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') return String(node);
+  if (Array.isArray(node)) return node.map(flattenDrizzleSql).join('');
+  if (Array.isArray(node.queryChunks)) return node.queryChunks.map(flattenDrizzleSql).join('');
+  if (Array.isArray(node.value)) return node.value.join('');
+  if (node.sql && typeof node.sql === 'object') return flattenDrizzleSql(node.sql);
+  return String(node.value ?? '');
+}
