@@ -99,7 +99,10 @@ export class RouteProtectionService {
     options?: { comicPath?: string },
   ): Promise<string> {
     const comicPath = options?.comicPath || (await this.getComicPath(comic));
-    return `${comicPath}/chapters/${chapter.slug}`;
+    // Unprotected: use numeric chapter ID (clean, SEO-friendly, parseable).
+    // Protected: use the opaque slug (hides the chapter ID).
+    const identifier = this.isProtected(comic) ? chapter.slug : String(chapter.id);
+    return `${comicPath}/chapters/${identifier}`;
   }
 
   @Cron(COMIC_SLUG_ROTATION_CRON)

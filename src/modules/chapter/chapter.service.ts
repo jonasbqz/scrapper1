@@ -28,6 +28,29 @@ export class ChapterService {
     return parsedComic.slug === comic.slug;
   }
 
+  async findChapterInComicById(comicId: number, chapterId: number) {
+    const scanRows = await this.db
+      .select({ id: comicScans.id })
+      .from(comicScans)
+      .where(eq(comicScans.comicId, comicId));
+    const scanIds = scanRows.map((row) => row.id);
+    if (scanIds.length === 0) {
+      return null;
+    }
+
+    const chapterRows = await this.db
+      .select()
+      .from(chapters)
+      .where(
+        and(
+          inArray(chapters.comicScanId, scanIds),
+          eq(chapters.id, chapterId),
+        ),
+      )
+      .limit(1);
+    return chapterRows[0] ?? null;
+  }
+
   async findChapterBySlugInComic(comicId: number, chapterSlug: string) {
     const scanRows = await this.db
       .select({ id: comicScans.id })
@@ -159,15 +182,32 @@ export class ChapterService {
       throw new NotFoundException('Comic not found');
     }
 
-    const chapter = await this.findChapterBySlugInComic(
-      comic.id,
-      parsedChapter.chapterSlug,
-    );
-    if (!chapter) {
-      if (comic.protectedRouteEnabled) {
+    let chapter = null;
+    if (comic.protectedRouteEnabled) {
+      // Protected routes use the opaque slug.
+      chapter = await this.findChapterBySlugInComic(
+        comic.id,
+        parsedChapter.chapterSlug,
+      );
+      if (!chapter) {
         throw this.routeProtectionService.createUnavailableException();
       }
-      throw new NotFoundException('Chapter not found');
+    } else {
+      // Unprotected routes expose the chapter ID in the URL.
+      const numericId = Number.parseInt(parsedChapter.chapterSlug, 10);
+      if (Number.isFinite(numericId) && numericId > 0) {
+        chapter = await this.findChapterInComicById(comic.id, numericId);
+      }
+      if (!chapter) {
+        // Fallback: legacy URLs may carry the slug instead of the ID.
+        chapter = await this.findChapterBySlugInComic(
+          comic.id,
+          parsedChapter.chapterSlug,
+        );
+      }
+      if (!chapter) {
+        throw new NotFoundException('Chapter not found');
+      }
     }
 
     const navigation = await this.getNavigation(chapter.id);

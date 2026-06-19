@@ -236,12 +236,20 @@ describe('RouteProtectionService', () => {
       {},
     );
 
-    it('returns /comics/<comic>/chapters/<slug> with no 90- prefix and no random suffix', async () => {
+    it('uses the numeric chapter ID for unprotected comics', async () => {
       const path = await service.getChapterPath(
         { id: 1, slug: 'naruto', protectedRouteEnabled: false },
         { id: 55, slug: '1185237596551512066' },
       );
-      expect(path).toBe('/comics/naruto/chapters/1185237596551512066');
+      expect(path).toBe('/comics/naruto/chapters/55');
+    });
+
+    it('uses the opaque slug for protected comics', async () => {
+      const path = await service.getChapterPath(
+        { id: 1, slug: '133naruto2125', protectedRouteEnabled: true },
+        { id: 55, slug: '1185237596551512066' },
+      );
+      expect(path).toBe('/comics/133naruto2125/chapters/1185237596551512066');
     });
 
     it('uses the provided comicPath when supplied', async () => {

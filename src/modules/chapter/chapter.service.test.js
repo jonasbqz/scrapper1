@@ -105,7 +105,7 @@ describe('ChapterService.findPublicByRouteSegments', () => {
     expect(result.navigation.current.id).toBe(55);
   });
 
-  it('resolves an unprotected comic + chapter slug', async () => {
+  it('resolves an unprotected comic + chapter ID (URL uses numeric ID, not slug)', async () => {
     const service = createChapterService({
       comicBySlug: {
         id: 10,
@@ -113,11 +113,11 @@ describe('ChapterService.findPublicByRouteSegments', () => {
         protectedRouteEnabled: false,
       },
       chaptersBySlug: [
-        { id: 55, slug: '5', comicScanId: 1 },
+        { id: 55, slug: '1185237596551512066', comicScanId: 1 },
       ],
     });
 
-    const result = await service.findPublicByRouteSegments('my-comic', '5');
+    const result = await service.findPublicByRouteSegments('my-comic', '55');
     expect(result.comic.slug).toBe('my-comic');
     expect(result.navigation.current.id).toBe(55);
   });
