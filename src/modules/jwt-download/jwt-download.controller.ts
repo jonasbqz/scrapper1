@@ -1,6 +1,6 @@
 import { Controller, Post, Req, Inject, ForbiddenException } from "@nestjs/common";
 import { ApiOperation, ApiTags } from "@nestjs/swagger";
-import { FastifyRequest } from "fastify";
+import type { FastifyRequest } from "fastify";
 import { and, eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "@/database/schema";

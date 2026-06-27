@@ -10,7 +10,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { FastifyRequest } from 'fastify';
+import type { FastifyRequest } from 'fastify';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AdminOrApiKeyGuard } from '@/modules/auth/admin-or-api-key.guard';
 import { SubscriptionsService } from './subscriptions.service';

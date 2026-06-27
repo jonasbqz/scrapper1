@@ -5,7 +5,7 @@ import {
   UnauthorizedException,
   Inject,
 } from '@nestjs/common';
-import { FastifyRequest } from 'fastify';
+import type { FastifyRequest } from 'fastify';
 import { auth } from '@/lib/auth';
 import { DATABASE_CONNECTION } from '@/database/database.module';
 import { eq } from 'drizzle-orm';

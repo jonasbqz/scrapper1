@@ -7,7 +7,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import fastifyCookie from '@fastify/cookie';
 import fastifyHelmet from '@fastify/helmet';
-import { FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyRequest, FastifyReply } from 'fastify';
 import { AppModule } from './app.module';
 import { parseCorsOrigins } from './lib/cors-origins';
 import { SanitizePipe } from './common/pipes';
