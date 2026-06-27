@@ -12,7 +12,7 @@
     "db:migrate": "bun drizzle-kit migrate",
     "db:migrate:manual": "bun scripts/apply-manual-migrations.ts",
     "db:fix-schema": "bun scripts/fix-runtime-schema.ts",
-    "db:migrate:all": "bun scripts/stamp-drizzle-0005.ts && bun scripts/run-drizzle-migrations.ts && bun scripts/apply-manual-migrations.ts",
+    "db:migrate:all": "bun scripts/stamp-drizzle-0005.ts && bun scripts/run-drizzle-migrations.ts && bun scripts/apply-manual-migrations.ts && bun scripts/remove-english-and-copyrighted.ts",
     "db:push": "bun drizzle-kit push",
     "db:studio": "bun drizzle-kit studio",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
