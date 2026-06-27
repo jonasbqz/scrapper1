@@ -5,7 +5,7 @@ import {
   CallHandler,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
-import { sanitizeString, sanitizeObject } from '../pipes/sanitize.pipe';
+import { sanitizeString, sanitizeObject } from '@/common/pipes/sanitize.pipe';
 
 /**
  * Interceptor that sanitizes query parameters and path parameters

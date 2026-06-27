@@ -8,15 +8,15 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import fastifyCookie from '@fastify/cookie';
 import fastifyHelmet from '@fastify/helmet';
 import type { FastifyRequest, FastifyReply } from 'fastify';
-import { AppModule } from './app.module';
-import { parseCorsOrigins } from './lib/cors-origins';
-import { SanitizePipe } from './common/pipes';
-import { SanitizeInterceptor } from './common/interceptors';
-import { HttpExceptionFilter } from './common/filters/http-exception.filter';
-import { auth } from './lib/auth';
+import { AppModule } from '@/app.module';
+import { parseCorsOrigins } from '@/lib/cors-origins';
+import { SanitizePipe } from '@/common/pipes';
+import { SanitizeInterceptor } from '@/common/interceptors';
+import { HttpExceptionFilter } from '@/common/filters/http-exception.filter';
+import { auth } from '@/lib/auth';
 import { toNodeHandler } from 'better-auth/node';
-import { getRequestClientIp } from './common/network/client-ip';
-import { warmEngagementScriptCache } from './modules/engagement/engagement-script.cache';
+import { getRequestClientIp } from '@/common/network/client-ip';
+import { warmEngagementScriptCache } from '@/modules/engagement/engagement-script.cache';
 
 function parseJsonBody(body: Buffer, done: (error: Error | null, body?: unknown) => void) {
   const rawBody = body.toString('utf8').trim();
