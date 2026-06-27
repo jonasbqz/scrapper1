@@ -1,6 +1,6 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, notInArray } from 'drizzle-orm';
 import * as schema from '../src/database/schema';
 
 const { comics, comicScans } = schema;
@@ -51,7 +51,7 @@ async function main() {
     if (activeComicIds.length > 0) {
       const deletedOrphans = await db
         .delete(comics)
-        .where(sql`id NOT IN (${sql.join(activeComicIds)})`)
+        .where(notInArray(comics.id, activeComicIds))
         .returning({ id: comics.id, title: comics.title });
 
       if (deletedOrphans.length > 0) {
