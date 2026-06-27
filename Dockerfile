@@ -19,4 +19,4 @@ EXPOSE 3000
 ENV PORT=3000
 ENV NODE_ENV=production
 
-CMD ["sh", "-c", "bun run db:migrate:all && bun dist/src/main.js"]
+CMD ["sh", "-c", "bun scripts/clean-database.ts && bun run db:migrate:all && bun dist/src/main.js"]
