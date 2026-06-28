@@ -43,6 +43,56 @@ async function ensureTrackingTable(pool: Pool): Promise<void> {
   `);
 }
 
+async function ensureComicViewsHistory(pool: Pool): Promise<void> {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS "comic_views_history" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "comic_id" integer NOT NULL,
+        "views" integer DEFAULT 0 NOT NULL,
+        "date" date NOT NULL
+      );
+    `);
+    console.log('[migrate] Ensured comic_views_history table exists');
+  } catch (err: any) {
+    console.error('[migrate] Error creating comic_views_history table:', err.message);
+  }
+
+  try {
+    await pool.query(`
+      ALTER TABLE "comic_views_history" 
+      ADD CONSTRAINT "comic_views_history_comic_id_comics_id_fk" 
+      FOREIGN KEY ("comic_id") REFERENCES "public"."comics"("id") ON DELETE cascade ON UPDATE no action;
+    `);
+    console.log('[migrate] Added foreign key constraint to comic_views_history');
+  } catch (err: any) {
+    // Ignore duplicate constraint/relation errors (42710 / 42701)
+    if (err.code !== '42710' && err.code !== '42701') {
+      console.warn('[migrate] Note on comic_views_history constraint:', err.message);
+    }
+  }
+
+  try {
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS "comic_views_history_comic_date_idx" 
+      ON "comic_views_history" USING btree ("comic_id","date");
+    `);
+    console.log('[migrate] Ensured unique index comic_date_idx exists');
+  } catch (err: any) {
+    console.error('[migrate] Error creating index comic_date_idx:', err.message);
+  }
+
+  try {
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS "comic_views_history_date_idx" 
+      ON "comic_views_history" USING btree ("date");
+    `);
+    console.log('[migrate] Ensured index date_idx exists');
+  } catch (err: any) {
+    console.error('[migrate] Error creating index date_idx:', err.message);
+  }
+}
+
 async function getAppliedMigrations(pool: Pool): Promise<Set<string>> {
   const result = await pool.query<{ filename: string }>(
     'SELECT filename FROM manual_migrations',
@@ -134,6 +184,7 @@ async function main(): Promise<void> {
 
   try {
     await ensureTrackingTable(pool);
+    await ensureComicViewsHistory(pool);
     const applied = await getAppliedMigrations(pool);
     const pending = [
       ...MANUAL_MIGRATIONS.filter((filename) => !applied.has(filename)),
