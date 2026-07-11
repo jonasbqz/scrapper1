@@ -1,7 +1,7 @@
 import { Injectable, Inject, NotFoundException } from '@nestjs/common';
 import { eq, desc, asc, and, sql, inArray } from 'drizzle-orm';
 import { DATABASE_CONNECTION } from '@/database/database.module';
-import { comics, comicGenres, genres, comicScans, chapters, comicViewsHistory } from '@/database/schema';
+import { comics, comicGenres, genres, comicScans, chapters, comicViewsHistory, scanGroups } from '@/database/schema';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '@/database/schema';
 import { CacheService, CACHE_TTL, CACHE_KEYS } from '@/cache/cache.service';
@@ -1220,33 +1220,60 @@ export class ComicService {
   /**
    * Get sitemap stats (total counts)
    */
-  async getSitemapStats(): Promise<{
-    totalComics: number;
-    totalChapters: number;
-    comicPages: number;
-    chapterPages: number;
-  }> {
-    const cacheKey = 'sitemap:stats';
+  async getSitemapStats(): Promise<any> {
+    const [comicCount, chapterCount] = await Promise.all([
+      this.db.select({ count: sql<number>`count(*)` }).from(comics),
+      this.db.select({ count: sql<number>`count(*)` }).from(chapters),
+    ]);
 
-    return this.cacheService.wrap(
-      cacheKey,
-      async () => {
-        const [comicCount, chapterCount] = await Promise.all([
-          this.db.select({ count: sql<number>`count(*)` }).from(comics),
-          this.db.select({ count: sql<number>`count(*)` }).from(chapters),
-        ]);
+    const totalComics = Number(comicCount[0]?.count || 0);
+    const totalChapters = Number(chapterCount[0]?.count || 0);
 
-        const totalComics = Number(comicCount[0]?.count || 0);
-        const totalChapters = Number(chapterCount[0]?.count || 0);
+    // Get statistics of active scrapers/scanGroups
+    const groups = await this.db.query.scanGroups.findMany({
+      with: {
+        comicScans: {
+          with: {
+            comic: true,
+            chapters: {
+              orderBy: [desc(chapters.createdAt)],
+              limit: 5,
+            }
+          }
+        }
+      }
+    });
 
-        return {
-          totalComics,
-          totalChapters,
-          comicPages: Math.ceil(totalComics / 1000),
-          chapterPages: Math.ceil(totalChapters / 5000),
-        };
-      },
-      CACHE_TTL.LONG, // 2 hours
-    );
+    const scraperStats = groups.map(g => {
+      const allChapters = g.comicScans.flatMap(cs => 
+        (cs.chapters || []).map(ch => ({
+          chapter: ch.chapterNumber,
+          title: ch.title,
+          createdAt: ch.createdAt,
+          comicTitle: cs.comic?.title,
+          comicSlug: cs.comic?.slug,
+          hasPages: Array.isArray(ch.urlPages) && ch.urlPages.length > 0,
+          pagesCount: Array.isArray(ch.urlPages) ? ch.urlPages.length : 0,
+        }))
+      );
+
+      // Sort all chapters by createdAt DESC
+      allChapters.sort((a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime());
+
+      return {
+        id: g.id,
+        name: g.name,
+        slug: g.slug,
+        totalComicsScraped: g.comicScans.length,
+        totalChaptersScraped: allChapters.length,
+        latestScrapedChapters: allChapters.slice(0, 5),
+      };
+    });
+
+    return {
+      totalComics,
+      totalChapters,
+      scrapers: scraperStats,
+    };
   }
 }
