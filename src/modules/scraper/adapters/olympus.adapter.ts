@@ -424,18 +424,30 @@ export class OlympusAdapter extends BaseScraperAdapter {
         this.logger.debug(`Found existing comic by title: "${comic.title}" -> Comic #${comicId}`);
       } else {
         // Create new comic
-        const [created] = await this.db.insert(comics).values({
-          title: comic.title,
-          slug: comic.slug,
-          titleAlternative: comic.titleAlternative,
-          description: comic.description,
-          author: comic.author,
-          coverImage: comic.coverImage,
-          type: comic.type === 'comic' ? 'manga' : comic.type,
-          status: comic.status,
-        }).returning();
-        comicId = created.id;
-        this.logger.log(`Created new comic: "${comic.title}" -> Comic #${comicId}`);
+        try {
+          const [created] = await this.db.insert(comics).values({
+            title: comic.title,
+            slug: comic.slug,
+            titleAlternative: comic.titleAlternative,
+            description: comic.description,
+            author: comic.author,
+            coverImage: comic.coverImage,
+            type: comic.type === 'comic' ? 'manga' : comic.type,
+            status: comic.status,
+          }).returning();
+          comicId = created.id;
+          this.logger.log(`Created new comic: "${comic.title}" -> Comic #${comicId}`);
+        } catch (insertError) {
+          this.logger.warn(`Failed to insert comic ${comic.slug}, attempting fallback query: ${insertError}`);
+          const fallbackComic = await this.db.query.comics.findFirst({
+            where: eq(comics.slug, comic.slug),
+          });
+          if (fallbackComic) {
+            comicId = fallbackComic.id;
+          } else {
+            throw insertError;
+          }
+        }
       }
 
       // Ensure comic scan exists for this scan group (with Olympus ID)

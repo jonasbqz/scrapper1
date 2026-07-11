@@ -413,15 +413,27 @@ export class IkigaiAdapter extends BaseScraperAdapter {
         comicId = existingBySlug.id;
       } else {
         // Create new comic
-        const [created] = await this.db.insert(comics).values({
-          title: comic.title,
-          slug: comic.slug,
-          description: comic.description,
-          coverImage: comic.coverImage,
-          type: comic.type === 'comic' ? 'manga' : comic.type,
-          status: comic.status,
-        }).returning();
-        comicId = created.id;
+        try {
+          const [created] = await this.db.insert(comics).values({
+            title: comic.title,
+            slug: comic.slug,
+            description: comic.description,
+            coverImage: comic.coverImage,
+            type: comic.type === 'comic' ? 'manga' : comic.type,
+            status: comic.status,
+          }).returning();
+          comicId = created.id;
+        } catch (insertError) {
+          this.logger.warn(`Failed to insert comic ${comic.slug}, attempting fallback query: ${insertError}`);
+          const fallbackComic = await this.db.query.comics.findFirst({
+            where: eq(comics.slug, comic.slug),
+          });
+          if (fallbackComic) {
+            comicId = fallbackComic.id;
+          } else {
+            throw insertError;
+          }
+        }
       }
     }
 
