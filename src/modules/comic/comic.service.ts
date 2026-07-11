@@ -233,27 +233,70 @@ export class ComicService {
     conditions.push(eq(comics.isHentai, false));
 
     let genreCondition: any = null;
+    let hasNsfwFilter = false;
 
     if (genreNames?.length) {
-      const genreRecords = await this.db.query.genres.findMany({
-        where: inArray(genres.name, genreNames),
-      });
-      const genreIdsFromNames = genreRecords.map(g => g.id);
-      if (genreIdsFromNames.length > 0) {
-        const comicsWithGenres = await this.db
-          .select({ comicId: comicGenres.comicId })
-          .from(comicGenres)
-          .where(inArray(comicGenres.genreId, genreIdsFromNames))
-          .groupBy(comicGenres.comicId)
-          .having(sql`count(distinct ${comicGenres.genreId}) >= ${genreIdsFromNames.length}`);
-        const comicIds = comicsWithGenres.map(c => c.comicId);
-        if (comicIds.length > 0) {
-          genreCondition = inArray(comics.id, comicIds);
+      const dbGenreNames: string[] = [];
+
+      for (const name of genreNames) {
+        const lowerName = name.toLowerCase().trim();
+        
+        // Handle +18 / NSFW tags
+        if (lowerName === "+18" || lowerName === "violencia sexual" || lowerName === "sexual violence") {
+          hasNsfwFilter = true;
+          continue;
+        }
+
+        // Map Gore / Terror/Horror/Terror to Horror
+        if (lowerName === "gore" || lowerName === "terror/horror" || lowerName === "terror") {
+          dbGenreNames.push("horror");
+          continue;
+        }
+
+        // Map Superheroes to Superpoderes/Super poderes
+        if (lowerName === "superheroes" || lowerName === "superheroe") {
+          dbGenreNames.push("superpoderes");
+          dbGenreNames.push("super poderes");
+          continue;
+        }
+
+        dbGenreNames.push(lowerName);
+      }
+
+      // If +18 was selected, enforce isNsfw = true
+      if (hasNsfwFilter) {
+        conditions.push(eq(comics.isNsfw, true));
+      }
+
+      if (dbGenreNames.length > 0) {
+        const genreRecords = await this.db.query.genres.findMany();
+        const normalize = (str: string) => 
+          str.toLowerCase()
+            .trim()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, ""); // remove accents
+
+        const normalizedDbNames = dbGenreNames.map(normalize);
+        const genreIdsFromNames = genreRecords
+          .filter(g => normalizedDbNames.includes(normalize(g.name)))
+          .map(g => g.id);
+
+        if (genreIdsFromNames.length > 0) {
+          const comicsWithGenres = await this.db
+            .select({ comicId: comicGenres.comicId })
+            .from(comicGenres)
+            .where(inArray(comicGenres.genreId, genreIdsFromNames))
+            .groupBy(comicGenres.comicId)
+            .having(sql`count(distinct ${comicGenres.genreId}) >= ${genreIdsFromNames.length}`);
+          const comicIds = comicsWithGenres.map(c => c.comicId);
+          if (comicIds.length > 0) {
+            genreCondition = inArray(comics.id, comicIds);
+          } else {
+            genreCondition = eq(comics.id, -1);
+          }
         } else {
           genreCondition = eq(comics.id, -1);
         }
-      } else {
-        genreCondition = eq(comics.id, -1);
       }
     } else if (genreIds?.length) {
       const comicsWithGenres = await this.db
@@ -342,6 +385,7 @@ export class ComicService {
       if (type) baseConditions.push(eq(comics.type, type));
       if (status) baseConditions.push(eq(comics.status, status));
       if (isNsfw !== undefined) baseConditions.push(eq(comics.isNsfw, isNsfw));
+      if (hasNsfwFilter) baseConditions.push(eq(comics.isNsfw, true));
       if (genreCondition) baseConditions.push(genreCondition);
       baseConditions.push(eq(comics.isHentai, false));
 
