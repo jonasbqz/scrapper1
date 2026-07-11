@@ -1231,14 +1231,16 @@ export class ComicService {
       `);
       olympusTestResult = { success: true };
     } catch (err: any) {
+      const cause = err.cause || {};
       olympusTestResult = {
         error: err.message || String(err),
         keys: Object.keys(err),
-        code: err.code,
-        detail: err.detail,
-        constraint: err.constraint,
-        table: err.table,
-        schema: err.schema,
+        causeKeys: Object.keys(cause),
+        code: cause.code || err.code,
+        detail: cause.detail || err.detail,
+        constraint: cause.constraint || err.constraint,
+        table: cause.table || err.table,
+        schema: cause.schema || err.schema,
       };
     }
 
