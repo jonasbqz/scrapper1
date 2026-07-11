@@ -459,16 +459,37 @@ export class NobledicionAdapter extends BaseScraperAdapter {
         await this.db.update(comics).set(updates).where(eq(comics.id, existingBySlug.id));
         comicId = existingBySlug.id;
       } else {
-        // Create new comic
-        const [created] = await this.db.insert(comics).values({
-          title: comic.title,
-          slug: comic.slug,
-          description: comic.description,
-          coverImage: comic.coverImage,
-          type: comic.type === 'comic' ? 'manga' : comic.type,
-          status: comic.status,
-        }).returning();
-        comicId = created.id;
+        // Check by title as second fallback to prevent unique constraint failures
+        const existingByTitle = await this.db.query.comics.findFirst({
+          where: eq(comics.title, comic.title),
+        });
+
+        if (existingByTitle) {
+          comicId = existingByTitle.id;
+        } else {
+          // Create new comic
+          try {
+            const [created] = await this.db.insert(comics).values({
+              title: comic.title,
+              slug: comic.slug,
+              description: comic.description,
+              coverImage: comic.coverImage,
+              type: comic.type === 'comic' ? 'manga' : comic.type,
+              status: comic.status,
+            }).returning();
+            comicId = created.id;
+          } catch (insertError) {
+            this.logger.warn(`Failed to insert comic ${comic.slug}, attempting fallback query: ${insertError}`);
+            const fallbackComic = await this.db.query.comics.findFirst({
+              where: eq(comics.slug, comic.slug),
+            });
+            if (fallbackComic) {
+              comicId = fallbackComic.id;
+            } else {
+              throw insertError;
+            }
+          }
+        }
       }
     }
 
@@ -490,14 +511,26 @@ export class NobledicionAdapter extends BaseScraperAdapter {
 
     const externalUrl = `${this.baseUrl}/manga/${comic.slug}/`;
 
-    const [created] = await this.db.insert(comicScans).values({
-      comicId,
-      scanGroupId: this.scanGroupId!,
-      externalUrl,
-      language: 'es',
-    }).returning();
+    try {
+      const [created] = await this.db.insert(comicScans).values({
+        comicId,
+        scanGroupId: this.scanGroupId!,
+        externalUrl,
+        language: 'es',
+      }).returning();
 
-    return created.id;
+      return created.id;
+    } catch (insertError) {
+      this.logger.warn(`Failed to insert comicScan for comicId ${comicId}, fallback query: ${insertError}`);
+      const fallback = await this.db.query.comicScans.findFirst({
+        where: and(
+          eq(comicScans.comicId, comicId),
+          eq(comicScans.scanGroupId, this.scanGroupId!),
+        ),
+      });
+      if (fallback) return fallback.id;
+      throw insertError;
+    }
   }
 
   private async syncGenres(comicId: number, genreNames: string[]): Promise<void> {
