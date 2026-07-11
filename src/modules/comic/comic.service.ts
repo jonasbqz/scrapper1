@@ -1221,79 +1221,33 @@ export class ComicService {
   /**
    * Get sitemap stats (total counts)
    */
-  async getSitemapStats(): Promise<any> {
-    const adapter = new OlympusAdapter(this.db, 100);
-    let olympusTestResult: any = null;
-    try {
-      olympusTestResult = await adapter.scrape(1, 1);
-    } catch (err: any) {
-      const cause = err.cause || {};
-      olympusTestResult = {
-        error: err.message || String(err),
-        keys: Object.keys(err),
-        causeKeys: Object.keys(cause),
-        code: cause.code || err.code,
-        detail: cause.detail || err.detail,
-        constraint: cause.constraint || err.constraint,
-        table: cause.table || err.table,
-        schema: cause.schema || err.schema,
-      };
-    }
+  async getSitemapStats(): Promise<{
+    totalComics: number;
+    totalChapters: number;
+    comicPages: number;
+    chapterPages: number;
+  }> {
+    const cacheKey = 'sitemap:stats';
 
-    const [comicCount, chapterCount] = await Promise.all([
-      this.db.select({ count: sql<number>`count(*)` }).from(comics),
-      this.db.select({ count: sql<number>`count(*)` }).from(chapters),
-    ]);
+    return this.cacheService.wrap(
+      cacheKey,
+      async () => {
+        const [comicCount, chapterCount] = await Promise.all([
+          this.db.select({ count: sql<number>`count(*)` }).from(comics),
+          this.db.select({ count: sql<number>`count(*)` }).from(chapters),
+        ]);
 
-    const totalComics = Number(comicCount[0]?.count || 0);
-    const totalChapters = Number(chapterCount[0]?.count || 0);
+        const totalComics = Number(comicCount[0]?.count || 0);
+        const totalChapters = Number(chapterCount[0]?.count || 0);
 
-    // Get statistics of active scrapers/scanGroups
-    const groups = await this.db.query.scanGroups.findMany({
-      with: {
-        comicScans: {
-          with: {
-            comic: true,
-            chapters: {
-              orderBy: [desc(chapters.createdAt)],
-              limit: 5,
-            }
-          }
-        }
-      }
-    });
-
-    const scraperStats = groups.map(g => {
-      const allChapters = g.comicScans.flatMap(cs => 
-        (cs.chapters || []).map(ch => ({
-          chapter: ch.chapterNumber,
-          title: ch.title,
-          createdAt: ch.createdAt,
-          comicTitle: cs.comic?.title,
-          comicSlug: cs.comic?.slug,
-          hasPages: Array.isArray(ch.urlPages) && ch.urlPages.length > 0,
-          pagesCount: Array.isArray(ch.urlPages) ? ch.urlPages.length : 0,
-        }))
-      );
-
-      // Sort all chapters by createdAt DESC
-      allChapters.sort((a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime());
-
-      return {
-        id: g.id,
-        name: g.name,
-        slug: g.slug,
-        totalComicsScraped: g.comicScans.length,
-        totalChaptersScraped: allChapters.length,
-        latestScrapedChapters: allChapters.slice(0, 5),
-      };
-    });
-
-    return {
-      totalComics,
-      totalChapters,
-      olympusTestResult,
-      scrapers: scraperStats,
-    };
+        return {
+          totalComics,
+          totalChapters,
+          comicPages: Math.ceil(totalComics / 1000),
+          chapterPages: Math.ceil(totalChapters / 5000),
+        };
+      },
+      CACHE_TTL.LONG, // 2 hours
+    );
   }
 }
