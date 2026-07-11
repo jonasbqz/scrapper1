@@ -1,4 +1,5 @@
 import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import { OlympusAdapter } from '@/modules/scraper/adapters/olympus.adapter';
 import { eq, desc, asc, and, sql, inArray } from 'drizzle-orm';
 import { DATABASE_CONNECTION } from '@/database/database.module';
 import { comics, comicGenres, genres, comicScans, chapters, comicViewsHistory, scanGroups } from '@/database/schema';
@@ -1221,6 +1222,14 @@ export class ComicService {
    * Get sitemap stats (total counts)
    */
   async getSitemapStats(): Promise<any> {
+    const adapter = new OlympusAdapter(this.db, 100);
+    let olympusTestResult: any = null;
+    try {
+      olympusTestResult = await adapter.scrape(1, 1);
+    } catch (err: any) {
+      olympusTestResult = { error: err.message || String(err), stack: err.stack };
+    }
+
     const [comicCount, chapterCount] = await Promise.all([
       this.db.select({ count: sql<number>`count(*)` }).from(comics),
       this.db.select({ count: sql<number>`count(*)` }).from(chapters),
@@ -1273,6 +1282,7 @@ export class ComicService {
     return {
       totalComics,
       totalChapters,
+      olympusTestResult,
       scrapers: scraperStats,
     };
   }
