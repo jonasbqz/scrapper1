@@ -232,6 +232,8 @@ export class ComicService {
     // Always exclude hentai comics
     conditions.push(eq(comics.isHentai, false));
 
+    let genreCondition: any = null;
+
     if (genreNames?.length) {
       const genreRecords = await this.db.query.genres.findMany({
         where: inArray(genres.name, genreNames),
@@ -246,12 +248,12 @@ export class ComicService {
           .having(sql`count(distinct ${comicGenres.genreId}) >= ${genreIdsFromNames.length}`);
         const comicIds = comicsWithGenres.map(c => c.comicId);
         if (comicIds.length > 0) {
-          conditions.push(inArray(comics.id, comicIds));
+          genreCondition = inArray(comics.id, comicIds);
         } else {
-          conditions.push(eq(comics.id, -1));
+          genreCondition = eq(comics.id, -1);
         }
       } else {
-        conditions.push(eq(comics.id, -1));
+        genreCondition = eq(comics.id, -1);
       }
     } else if (genreIds?.length) {
       const comicsWithGenres = await this.db
@@ -262,10 +264,14 @@ export class ComicService {
         .having(sql`count(distinct ${comicGenres.genreId}) >= ${genreIds.length}`);
       const comicIds = comicsWithGenres.map(c => c.comicId);
       if (comicIds.length > 0) {
-        conditions.push(inArray(comics.id, comicIds));
+        genreCondition = inArray(comics.id, comicIds);
       } else {
-        conditions.push(eq(comics.id, -1));
+        genreCondition = eq(comics.id, -1);
       }
+    }
+
+    if (genreCondition) {
+      conditions.push(genreCondition);
     }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
@@ -336,6 +342,7 @@ export class ComicService {
       if (type) baseConditions.push(eq(comics.type, type));
       if (status) baseConditions.push(eq(comics.status, status));
       if (isNsfw !== undefined) baseConditions.push(eq(comics.isNsfw, isNsfw));
+      if (genreCondition) baseConditions.push(genreCondition);
       baseConditions.push(eq(comics.isHentai, false));
 
       const similarityExpr = sql`GREATEST(
