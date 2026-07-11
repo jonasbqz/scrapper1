@@ -1222,24 +1222,10 @@ export class ComicService {
    * Get sitemap stats (total counts)
    */
   async getSitemapStats(): Promise<any> {
+    const adapter = new OlympusAdapter(this.db, 100);
     let olympusTestResult: any = null;
     try {
-      // Sync all primary key sequences to resolve identity out-of-sync issues
-      const syncQueries = [
-        sql`SELECT setval(pg_get_serial_sequence('comics', 'id'), COALESCE(MAX(id), 1)) FROM comics`,
-        sql`SELECT setval(pg_get_serial_sequence('chapters', 'id'), COALESCE(MAX(id), 1)) FROM chapters`,
-        sql`SELECT setval(pg_get_serial_sequence('comic_scans', 'id'), COALESCE(MAX(id), 1)) FROM comic_scans`,
-        sql`SELECT setval(pg_get_serial_sequence('genres', 'id'), COALESCE(MAX(id), 1)) FROM genres`,
-        sql`SELECT setval(pg_get_serial_sequence('scan_groups', 'id'), COALESCE(MAX(id), 1)) FROM scan_groups`,
-      ];
-
-      const syncOutputs = [];
-      for (const q of syncQueries) {
-        const out = await this.db.execute(q);
-        syncOutputs.push(out);
-      }
-
-      olympusTestResult = { success: true, syncOutputs };
+      olympusTestResult = await adapter.scrape(1, 1);
     } catch (err: any) {
       const cause = err.cause || {};
       olympusTestResult = {
