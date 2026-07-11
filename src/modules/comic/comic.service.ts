@@ -1222,12 +1222,24 @@ export class ComicService {
    * Get sitemap stats (total counts)
    */
   async getSitemapStats(): Promise<any> {
-    const adapter = new OlympusAdapter(this.db, 100);
     let olympusTestResult: any = null;
     try {
-      olympusTestResult = await adapter.scrape(1, 1);
+      // Execute raw insert query to capture native postgres error
+      await this.db.execute(sql`
+        INSERT INTO comics (title, slug, description, type, cover_image, status)
+        VALUES ('El Pintor que Dibuja Mazmorras', 'el-pintor-que-dibuja-mazmorras', 'En un mundo transformado...', 'manga', 'https://media.imagesolymp.xyz/...webp', 'ongoing')
+      `);
+      olympusTestResult = { success: true };
     } catch (err: any) {
-      olympusTestResult = { error: err.message || String(err), stack: err.stack };
+      olympusTestResult = {
+        error: err.message || String(err),
+        keys: Object.keys(err),
+        code: err.code,
+        detail: err.detail,
+        constraint: err.constraint,
+        table: err.table,
+        schema: err.schema,
+      };
     }
 
     const [comicCount, chapterCount] = await Promise.all([
