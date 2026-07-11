@@ -1224,12 +1224,22 @@ export class ComicService {
   async getSitemapStats(): Promise<any> {
     let olympusTestResult: any = null;
     try {
-      // Execute raw insert query to capture native postgres error
-      await this.db.execute(sql`
-        INSERT INTO comics (title, slug, description, type, cover_image, status)
-        VALUES ('El Pintor que Dibuja Mazmorras', 'el-pintor-que-dibuja-mazmorras', 'En un mundo transformado...', 'manga', 'https://media.imagesolymp.xyz/...webp', 'ongoing')
-      `);
-      olympusTestResult = { success: true };
+      // Sync all primary key sequences to resolve identity out-of-sync issues
+      const syncQueries = [
+        sql`SELECT setval(pg_get_serial_sequence('comics', 'id'), COALESCE(MAX(id), 1)) FROM comics`,
+        sql`SELECT setval(pg_get_serial_sequence('chapters', 'id'), COALESCE(MAX(id), 1)) FROM chapters`,
+        sql`SELECT setval(pg_get_serial_sequence('comic_scans', 'id'), COALESCE(MAX(id), 1)) FROM comic_scans`,
+        sql`SELECT setval(pg_get_serial_sequence('genres', 'id'), COALESCE(MAX(id), 1)) FROM genres`,
+        sql`SELECT setval(pg_get_serial_sequence('scan_groups', 'id'), COALESCE(MAX(id), 1)) FROM scan_groups`,
+      ];
+
+      const syncOutputs = [];
+      for (const q of syncQueries) {
+        const out = await this.db.execute(q);
+        syncOutputs.push(out);
+      }
+
+      olympusTestResult = { success: true, syncOutputs };
     } catch (err: any) {
       const cause = err.cause || {};
       olympusTestResult = {
