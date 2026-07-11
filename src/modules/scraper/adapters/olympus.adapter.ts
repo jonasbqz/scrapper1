@@ -59,8 +59,9 @@ export class OlympusAdapter extends BaseScraperAdapter {
         try {
           await this.scrapeComic(url, olympusId, result);
           await this.delay();
-        } catch (error) {
-          const msg = `Failed to scrape comic ${url} (ID: ${olympusId}): ${error}`;
+        } catch (error: any) {
+          const dbDetails = error.code ? ` [Code: ${error.code}, Detail: ${error.detail}, Constraint: ${error.constraint}, Hint: ${error.hint}]` : '';
+          const msg = `Failed to scrape comic ${url} (ID: ${olympusId}): ${error.message || error}${dbDetails}`;
           this.logger.error(msg);
           result.errors.push(msg);
         }
