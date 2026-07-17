@@ -12,15 +12,19 @@ const ENGAGEMENT_SCRIPT_SOURCE = `
 
   var _xp = ['/login', '/playlist', '/terms', '/privacy', '/disclaimer', '/profile', '/premium', '/register'];
 
-  var COOLDOWN       = 12000;
-  var FIRST_WAIT     = 3000;
   var MAX_PER_LINK_H = 3;
   var LINK_HOUR      = 10800000;
   var VIEW_COOLDOWN  = 14400000;
-  var VIEW_THRESHOLD = 60000;
+  var VIEW_THRESHOLD = 7000; // Subido a 7 segundos para contar visualización real
   var TYPE_COOLDOWN  = 1800000;
   var INACTIVE_MS    = 60000;
   var STORAGE_KEY    = '_okl';
+  var MAX_POPUNDERS  = 4; // Límite de sesión de 4 popunders máximo
+
+  var sessionCount = 0;
+  try {
+    sessionCount = parseInt(sessionStorage.getItem(STORAGE_KEY + '_session_count') || '0', 10);
+  } catch(e) {}
 
   var touchStartX = 0;
   var touchStartY = 0;
@@ -66,6 +70,10 @@ const ENGAGEMENT_SCRIPT_SOURCE = `
   }
 
   saveState(state);
+
+  var isNewUser      = !state.hasHadFirstClick;
+  var FIRST_WAIT     = isNewUser ? 1000 : 3000;  // 1s para nuevos, 3s para recurrentes
+  var COOLDOWN       = isNewUser ? 5000 : 10000; // Cooldown de 5s para nuevos, 10s para recurrentes
 
   function isExcluded() {
     var p = location.pathname;
@@ -135,8 +143,15 @@ const ENGAGEMENT_SCRIPT_SOURCE = `
     state.links[link.u].shows.push({ ts: now, viewed: false });
 
     state.lastShow = now;
+    state.hasHadFirstClick = true; // Marcar que ya interactuó alguna vez
 
     saveState(state);
+
+    // Incrementar contador de sesión
+    sessionCount++;
+    try {
+      sessionStorage.setItem(STORAGE_KEY + '_session_count', String(sessionCount));
+    } catch(e) {}
 
     var targetUrl = atob(decodeURIComponent(link.u));
     var openedWindow = null;
@@ -180,6 +195,7 @@ const ENGAGEMENT_SCRIPT_SOURCE = `
   function handleClick(e) {
     if (e.target.id === 'close-vip-ads') return;
     if (isExcluded()) return;
+    if (sessionCount >= MAX_POPUNDERS) return; // Limitar a 4 popunders por sesión
     if (!ready) return;
     if (!active) return;
 
